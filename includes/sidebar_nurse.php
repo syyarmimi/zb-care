@@ -1,41 +1,266 @@
-<div class="bg-dark text-white p-3" style="width: 250px; min-height: 100vh;">
+<?php
 
-    <h4 class="text-center mb-4">🩺 Nurse Panel</h4>
+$current = basename($_SERVER['PHP_SELF']);
 
-    <ul class="nav flex-column">
+?>
 
-        <li class="nav-item mb-2">
-            <a href="../pages/nurse_dashboard.php" class="nav-link text-white">
-                <i class="bi bi-speedometer2"></i> Dashboard
-            </a>
-        </li>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
 
-        <li class="nav-item mb-2">
-            <a href="../pages/nurse_patients.php" class="nav-link text-white">
-                <i class="bi bi-people"></i> Patients
-            </a>
-        </li>
+<style>
 
-        <li class="nav-item mb-2">
-            <a href="../pages/nurse_medication.php" class="nav-link text-white">
-                <i class="bi bi-capsule"></i> Medication
-            </a>
-        </li>
+.sidebar{
+    width:270px;
+    min-height:100vh;
 
-        <li class="nav-item mb-2">
-            <a href="../pages/nurse_meal.php" class="nav-link text-white">
-                <i class="bi bi-egg-fried"></i> Meals
-            </a>
-        </li>
+    background:linear-gradient(
+        180deg,
+        #0f172a 0%,
+        #1e293b 100%
+    );
 
-        <hr class="bg-light">
+    color:white;
 
-        <li class="nav-item">
-            <a href="../auth/logout.php" class="nav-link text-danger">
-                <i class="bi bi-box-arrow-right"></i> Logout
-            </a>
-        </li>
+    box-shadow:
+    0 0 30px rgba(0,0,0,.15);
 
-    </ul>
+    position:sticky;
+    top:0;
+}
+
+.system-logo{
+
+    text-align:center;
+
+    font-weight:700;
+
+    font-size:22px;
+
+    margin-bottom:25px;
+
+    color:white;
+}
+
+.profile-card{
+
+    background:rgba(255,255,255,.08);
+
+    border:1px solid rgba(255,255,255,.08);
+
+    border-radius:20px;
+
+    padding:20px;
+
+    text-align:center;
+
+    margin-bottom:25px;
+}
+
+.profile-icon{
+
+    width:90px;
+    height:90px;
+
+    margin:auto;
+
+    border-radius:50%;
+
+    background:white;
+
+    display:flex;
+    align-items:center;
+    justify-content:center;
+
+    font-size:45px;
+
+    color:#3b82f6;
+
+    box-shadow:
+    0 8px 20px rgba(0,0,0,.25);
+}
+
+.profile-name{
+
+    font-weight:700;
+
+    margin-top:15px;
+
+    margin-bottom:3px;
+}
+
+.profile-role{
+
+    color:#cbd5e1;
+
+    font-size:13px;
+}
+
+.sidebar-title{
+
+    color:#94a3b8;
+
+    font-size:11px;
+
+    text-transform:uppercase;
+
+    letter-spacing:2px;
+
+    margin-top:15px;
+
+    margin-bottom:10px;
+
+    padding-left:8px;
+}
+
+.sidebar .nav-link{
+
+    color:#e2e8f0;
+
+    padding:13px 15px;
+
+    margin-bottom:8px;
+
+    border-radius:14px;
+
+    display:flex;
+
+    align-items:center;
+
+    text-decoration:none;
+
+    transition:.3s;
+
+    font-size:15px;
+
+    font-weight:500;
+}
+
+.sidebar .nav-link:hover{
+
+    background:rgba(59,130,246,.15);
+
+    color:white;
+
+    transform:translateX(4px);
+}
+
+.sidebar .nav-link.active{
+
+    background:linear-gradient(
+        135deg,
+        #2563eb,
+        #3b82f6
+    );
+
+    color:white;
+
+    box-shadow:
+    0 8px 20px rgba(37,99,235,.35);
+}
+
+.menu-icon{
+
+    width:22px;
+
+    margin-right:12px;
+
+    text-align:center;
+}
+
+.logout{
+
+    color:#f87171 !important;
+}
+
+.logout:hover{
+
+    background:rgba(239,68,68,.15) !important;
+}
+
+</style>
+
+<div class="sidebar">
+
+<div class="p-3">
+
+    <!-- LOGO -->
+
+    <div class="system-logo">
+        <i class="bi bi-heart-pulse-fill"></i>
+        ZB-CARE
+    </div>
+
+    <!-- PROFILE -->
+
+    <div class="profile-card">
+
+        <div class="profile-icon">
+            <i class="bi bi-person-heart"></i>
+        </div>
+
+        <div class="profile-name">
+            Nurse
+        </div>
+
+        <div class="profile-role">
+            Patient Care Staff
+        </div>
+
+    </div>
+
+    <div class="sidebar-title">
+        Main Menu
+    </div>
+
+    <!-- DASHBOARD -->
+
+    <a href="../pages/nurse_dashboard.php"
+       class="nav-link <?= ($current=='nurse_dashboard.php') ? 'active' : '' ?>">
+
+        <span>
+            <i class="bi bi-speedometer2 menu-icon"></i>
+            Dashboard
+        </span>
+
+    </a>
+
+    <!-- PATIENTS -->
+
+    <a href="../pages/nurse_patients.php"
+       class="nav-link <?= ($current=='nurse_patients.php') ? 'active' : '' ?>">
+
+        <span>
+            <i class="bi bi-people-fill menu-icon"></i>
+            Patients
+        </span>
+
+    </a>
+
+    <!-- MEDICATION -->
+
+    <a href="../pages/nurse_medication.php"
+       class="nav-link <?= ($current=='nurse_medication.php') ? 'active' : '' ?>">
+
+        <span>
+            <i class="bi bi-capsule-pill menu-icon"></i>
+            Medication
+        </span>
+
+    </a>
+
+    <hr style="border-color:rgba(255,255,255,.15);">
+
+    <!-- LOGOUT -->
+
+    <a href="../auth/logout.php"
+       class="nav-link logout">
+
+        <span>
+            <i class="bi bi-box-arrow-right menu-icon"></i>
+            Logout
+        </span>
+
+    </a>
+
+</div>
 
 </div>

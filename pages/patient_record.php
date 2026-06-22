@@ -27,13 +27,6 @@ JOIN SYARMIMI.MEDICATION m ON mo.MEDICATION_ID = m.MEDICATION_ID
 WHERE mo.ADMISSION_ID = $id
 ");
 
-/* MEAL */
-$meal = $conn->query("
-SELECT m.FOOD_NAME, mp.MEALTIME_SLOT
-FROM SYARMIMI.MEAL_PLAN mp
-JOIN SYARMIMI.MENU_ITEM m ON mp.MENUITEM_ID = m.MENUITEM_ID
-WHERE mp.ADMISSION_ID = $id
-");
 ?>
 
 <!DOCTYPE html>
@@ -142,32 +135,6 @@ $hasMed = true;
 
 <?php if(!$hasMed): ?>
 <p class="empty">No medication prescribed</p>
-<?php endif; ?>
-
-</div>
-</div>
-
-<!-- MEAL -->
-<div class="col-md-4">
-<div class="card-box">
-
-<h5 class="section-title">🍽️ Meal Plan</h5>
-
-<?php 
-$hasMeal = false;
-while($m = $meal->fetch(PDO::FETCH_ASSOC)): 
-$hasMeal = true;
-?>
-
-<div class="mb-3 p-2 border rounded">
-    <strong><?= $m['FOOD_NAME'] ?></strong><br>
-    <small><?= $m['MEALTIME_SLOT'] ?></small>
-</div>
-
-<?php endwhile; ?>
-
-<?php if(!$hasMeal): ?>
-<p class="empty">No meal assigned</p>
 <?php endif; ?>
 
 </div>

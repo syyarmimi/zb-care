@@ -9,24 +9,34 @@ if (!isset($_SESSION['role']) || $_SESSION['role'] != 'admin') {
 }
 
 /* =========================
-   ADD STAFF (FIXED)
+   ADD STAFF
 ========================= */
 if(isset($_POST['add'])){
-    $username = $_POST['username'];
-    $password = password_hash($_POST['password'], PASSWORD_DEFAULT); // 🔐 HASH PASSWORD
-    $role     = $_POST['role'];
+
+    $username   = $_POST['username'];
+    $password   = password_hash($_POST['password'], PASSWORD_DEFAULT);
+    $role       = $_POST['role'];
+    $department = $_POST['department'];
 
     try {
-        // ✅ NO ACCOUNT_ID HERE (Oracle auto generate)
-        $sql = "INSERT INTO SYARMIMI.HOSPITAL_STAFF 
-                (USERNAME, PASSWORD, ROLE) 
-                VALUES (?, ?, ?)";
+
+        $sql = "INSERT INTO SYARMIMI.HOSPITAL_STAFF
+                (USERNAME, PASSWORD, ROLE, DEPARTMENT)
+                VALUES (?, ?, ?, ?)";
 
         $stmt = $conn->prepare($sql);
-        $stmt->execute([$username, $password, $role]);
 
-    } catch (PDOException $e) {
+        $stmt->execute([
+            $username,
+            $password,
+            $role,
+            $department
+        ]);
+
+    } catch(PDOException $e){
+
         die("Insert Error: " . $e->getMessage());
+
     }
 }
 
@@ -34,27 +44,93 @@ if(isset($_POST['add'])){
    DELETE STAFF
 ========================= */
 if(isset($_GET['delete'])){
+
     $id = $_GET['delete'];
 
-    $sql = "DELETE FROM SYARMIMI.HOSPITAL_STAFF WHERE ACCOUNT_ID = ?";
+    $sql = "DELETE FROM SYARMIMI.HOSPITAL_STAFF
+            WHERE ACCOUNT_ID = ?";
+
     $stmt = $conn->prepare($sql);
+
     $stmt->execute([$id]);
 }
 
 /* =========================
    FETCH STAFF
 ========================= */
-$sql = "SELECT * FROM SYARMIMI.HOSPITAL_STAFF ORDER BY ACCOUNT_ID";
+
+$sql = "SELECT *
+        FROM SYARMIMI.HOSPITAL_STAFF
+        ORDER BY ACCOUNT_ID DESC";
+
 $stmt = $conn->query($sql);
+
 ?>
 
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Manage Staff</title>
+<title>Manage Staff</title>
 
-    <!-- Bootstrap -->
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+
+<style>
+
+body{
+    background:#f4f6f9;
+    font-family:'Segoe UI';
+}
+
+.page-title{
+    font-size:38px;
+    font-weight:700;
+}
+
+.card-box{
+    background:white;
+    padding:30px;
+    border-radius:25px;
+    box-shadow:0 10px 25px rgba(0,0,0,0.05);
+}
+
+.table th{
+    background:#1e293b;
+    color:white;
+}
+
+.badge-role{
+    padding:8px 15px;
+    border-radius:20px;
+    font-size:13px;
+}
+
+.role-admin{
+    background:#dc2626;
+    color:white;
+}
+
+.role-doctor{
+    background:#2563eb;
+    color:white;
+}
+
+.role-nurse{
+    background:#16a34a;
+    color:white;
+}
+
+.role-pharmacist{
+    background:#d97706;
+    color:white;
+}
+
+.role-kitchen{
+    background:#7c3aed;
+    color:white;
+}
+
+</style>
+
 </head>
 
 <body>
@@ -65,91 +141,242 @@ $stmt = $conn->query($sql);
 
 <div class="flex-grow-1 p-4">
 
-<div class="container-fluid">
+<h2 class="page-title mb-4">
+👥 Manage Staff
+</h2>
 
-    <h3>👥 Manage Staff</h3>
+<!-- =========================
+     ADD STAFF
+========================= -->
 
-    <!-- ADD STAFF FORM -->
-    <div class="card p-3 mb-4 shadow-sm">
-        <h5>Add New Staff</h5>
+<div class="card-box mb-4">
 
-        <form method="POST">
-            <div class="row">
-                <div class="col-md-3">
-                    <input type="text" name="username" class="form-control" placeholder="Username" required>
-                </div>
+<h4 class="mb-4">
+Add New Staff
+</h4>
 
-                <div class="col-md-3">
-                    <input type="password" name="password" class="form-control" placeholder="Password" required>
-                </div>
+<form method="POST">
 
-                <div class="col-md-3">
-                    <select name="role" class="form-control" required>
-                        <option value="">Select Role</option>
-                        <option value="admin">Admin</option>
-                        <option value="doctor">Doctor</option>
-                        <option value="nurse">Nurse</option>
-                        <option value="pharmacist">Pharmacist</option>
-                        <option value="kitchen">Kitchen</option>
-                    </select>
-                </div>
+<div class="row g-3">
 
-                <div class="col-md-3">
-                    <button type="submit" name="add" class="btn btn-primary w-100">
-                        Add Staff
-                    </button>
-                </div>
-            </div>
-        </form>
-    </div>
+<div class="col-md-3">
 
-    <!-- STAFF TABLE -->
-    <div class="card p-3 shadow-sm">
-        <h5>Staff List</h5>
+<input type="text"
+name="username"
+class="form-control"
+placeholder="Username"
+required>
 
-        <table class="table table-bordered table-striped mt-3">
-            <thead class="table-dark">
-                <tr>
-                    <th>ID</th>
-                    <th>Username</th>
-                    <th>Role</th>
-                    <th>Action</th>
-                </tr>
-            </thead>
+</div>
 
-            <tbody>
-                <?php while($row = $stmt->fetch(PDO::FETCH_ASSOC)) { ?>
-                    <tr>
-                        <td><?= $row['ACCOUNT_ID']; ?></td>
+<div class="col-md-3">
 
-                        <!-- 🔥 ONLY CHANGE IS HERE -->
-                        <td>
-                            <?= ($row['ROLE'] == 'doctor') 
-                                ? 'DR. '.$row['USERNAME'] 
-                                : $row['USERNAME']; ?>
-                        </td>
+<input type="password"
+name="password"
+class="form-control"
+placeholder="Password"
+required>
 
-                        <td><?= strtoupper($row['ROLE']); ?></td>
+</div>
 
-                        <td>
-                            <a href="staff.php?delete=<?= $row['ACCOUNT_ID']; ?>" 
-                               class="btn btn-danger btn-sm"
-                               onclick="return confirm('Delete this staff?')">
-                                Delete
-                            </a>
-                        </td>
-                    </tr>
-                <?php } ?>
-            </tbody>
-        </table>
+<div class="col-md-3">
 
-    </div>
+<select name="role"
+id="role"
+class="form-control"
+required>
+
+<option value="">Select Role</option>
+
+<option value="admin">Admin</option>
+
+<option value="doctor">Doctor</option>
+
+<option value="nurse">Nurse</option>
+
+<option value="pharmacist">Pharmacist</option>
+
+<option value="kitchen">Kitchen</option>
+
+</select>
+
+</div>
+
+<div class="col-md-3">
+
+<select name="department"
+id="department"
+class="form-control">
+
+<option value="">Select Department</option>
+
+<option value="Orthopaedics">
+Orthopaedics
+</option>
+
+<option value="Paediatrics">
+Paediatrics
+</option>
+
+<option value="Dietitian & Nutrition">
+Dietitian & Nutrition
+</option>
+
+</select>
+
+</div>
+
+<div class="col-md-12">
+
+<button type="submit"
+name="add"
+class="btn btn-primary w-100">
+
+Add Staff
+
+</button>
+
+</div>
+
+</div>
+
+</form>
+
+</div>
+
+<!-- =========================
+     STAFF LIST
+========================= -->
+
+<div class="card-box">
+
+<h4 class="mb-4">
+Staff List
+</h4>
+
+<div class="table-responsive">
+
+<table class="table table-bordered table-hover align-middle">
+
+<thead>
+
+<tr>
+
+<th>ID</th>
+<th>Username</th>
+<th>Role</th>
+<th>Department</th>
+<th>Action</th>
+
+</tr>
+
+</thead>
+
+<tbody>
+
+<?php while($row = $stmt->fetch(PDO::FETCH_ASSOC)) { ?>
+
+<tr>
+
+<td>
+<?= $row['ACCOUNT_ID']; ?>
+</td>
+
+<td>
+
+<?= ($row['ROLE'] == 'doctor')
+? 'Dr. '.$row['USERNAME']
+: $row['USERNAME']; ?>
+
+</td>
+
+<td>
+
+<?php
+
+$role = $row['ROLE'];
+
+if($role == 'admin'){
+    echo "<span class='badge-role role-admin'>ADMIN</span>";
+}
+elseif($role == 'doctor'){
+    echo "<span class='badge-role role-doctor'>DOCTOR</span>";
+}
+elseif($role == 'nurse'){
+    echo "<span class='badge-role role-nurse'>NURSE</span>";
+}
+elseif($role == 'pharmacist'){
+    echo "<span class='badge-role role-pharmacist'>PHARMACIST</span>";
+}
+else{
+    echo "<span class='badge-role role-kitchen'>KITCHEN</span>";
+}
+
+?>
+
+</td>
+
+<td>
+
+<?= $row['DEPARTMENT'] ?: '-' ?>
+
+</td>
+
+<td>
+
+<a href="staff.php?delete=<?= $row['ACCOUNT_ID']; ?>"
+class="btn btn-danger btn-sm"
+onclick="return confirm('Delete this staff?')">
+
+Delete
+
+</a>
+
+</td>
+
+</tr>
+
+<?php } ?>
+
+</tbody>
+
+</table>
 
 </div>
 
 </div>
 
 </div>
+
+</div>
+
+<script>
+
+/* =========================
+   HIDE DEPARTMENT IF NOT DOCTOR
+========================= */
+
+const role = document.getElementById('role');
+const department = document.getElementById('department');
+
+role.addEventListener('change', function(){
+
+    if(this.value == 'doctor'){
+
+        department.disabled = false;
+
+    }else{
+
+        department.value = '';
+        department.disabled = true;
+
+    }
+
+});
+
+department.disabled = true;
+
+</script>
 
 </body>
 </html>

@@ -20,31 +20,63 @@ $row2 = $stmt2->fetch(PDO::FETCH_ASSOC);
 $stmt3 = $conn->query("SELECT COUNT(*) AS TOTAL FROM SYARMIMI.BED WHERE STATUS='Occupied'");
 $row3 = $stmt3->fetch(PDO::FETCH_ASSOC);
 
+// TOTAL BEDS
+$totalBeds = $conn->query("
+SELECT COUNT(*)
+FROM SYARMIMI.BED
+")->fetchColumn();
+
+
+// ACTIVE WARDS
+$activeWards = $conn->query("
+SELECT COUNT(DISTINCT WARD_ID)
+FROM SYARMIMI.BED
+")->fetchColumn();
+
+
+// RECENT ADMISSIONS
+$recentAdmissions = $conn->query("
+SELECT
+p.NAME,
+b.BED_NUMBER,
+w.WARD_NAME,
+a.ADMISSION_ID
+
+FROM SYARMIMI.ADMISSION a
+JOIN SYARMIMI.PATIENT p
+ON a.PATIENT_ID = p.PATIENT_ID
+
+JOIN SYARMIMI.BED b
+ON a.BED_ID = b.BED_ID
+
+JOIN SYARMIMI.WARD w
+ON b.WARD_ID = w.WARD_ID
+
+ORDER BY a.ADMISSION_ID DESC
+
+FETCH FIRST 5 ROWS ONLY
+");
+
 // ✅ NEW: PENDING MEDICATION
 $pendingMed = $conn->query("
-SELECT COUNT(*) 
+
+SELECT COUNT(*)
+
 FROM SYARMIMI.MEDICATION_ORDER mo
-LEFT JOIN SYARMIMI.MEDICATION_DELIVERY md 
-ON mo.MEDORDER_ID = md.MEDORDER_ID
-WHERE md.MEDORDER_ID IS NULL
+
+JOIN SYARMIMI.ADMISSION a
+ON mo.ADMISSION_ID = a.ADMISSION_ID
+
+JOIN SYARMIMI.PHARMACY_PREPARATION pp
+ON mo.MEDORDER_ID = pp.MEDORDER_ID
+
+LEFT JOIN SYARMIMI.MEDICATION_ADMIN ma
+ON mo.MEDORDER_ID = ma.MEDORDER_ID
+
+WHERE ma.MEDORDER_ID IS NULL
+
 ")->fetchColumn();
 
-// ✅ NEW: PENDING MEAL
-$pendingMeal = $conn->query("
-SELECT COUNT(*) 
-FROM SYARMIMI.MEAL_PLAN mp
-LEFT JOIN SYARMIMI.MEAL_DELIVERY md 
-ON mp.MEALPLAN_ID = md.MEALPLAN_ID
-WHERE md.MEALPLAN_ID IS NULL
-")->fetchColumn();
-
-// RECENT PATIENTS
-$sql = "SELECT p.NAME, p.GENDER, a.ADMISSION_ID
-        FROM SYARMIMI.PATIENT p
-        JOIN SYARMIMI.ADMISSION a ON p.PATIENT_ID = a.PATIENT_ID
-        ORDER BY a.ADMISSION_ID DESC";
-
-$stmt = $conn->query($sql);
 ?>
 
 <!DOCTYPE html>
@@ -54,6 +86,7 @@ $stmt = $conn->query($sql);
 
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons/font/bootstrap-icons.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
 
 <style>
 body {
@@ -90,6 +123,37 @@ body {
     transform: translateY(-3px);
     transition: 0.2s;
 }
+
+.dashboard-card{
+    background:white;
+    border:none;
+    border-radius:20px;
+    box-shadow:0 10px 25px rgba(0,0,0,.08);
+    transition:.3s;
+}
+
+.dashboard-card:hover{
+    transform:translateY(-4px);
+}
+
+.stat-number{
+    font-size:38px;
+    font-weight:700;
+}
+
+.realtime-card{
+    background:white;
+    border-radius:20px;
+    padding:25px;
+    box-shadow:0 10px 25px rgba(0,0,0,.08);
+}
+
+.section-card{
+    background:white;
+    border-radius:20px;
+    padding:25px;
+    box-shadow:0 10px 25px rgba(0,0,0,.08);
+}
 </style>
 </head>
 
@@ -104,7 +168,7 @@ body {
 <h3 class="mb-4">🩺 Nurse Dashboard</h3>
 
 <!-- 🔔 NEW NOTIFICATION -->
-<?php if($pendingMed > 0 || $pendingMeal > 0): ?>
+<?php if($pendingMed > 0): ?>
 <div class="alert alert-warning d-flex justify-content-between align-items-center">
 
 <div>
@@ -112,10 +176,6 @@ body {
 
 <?php if($pendingMed > 0): ?>
 💊 <?= $pendingMed ?> medication(s) waiting for delivery<br>
-<?php endif; ?>
-
-<?php if($pendingMeal > 0): ?>
-🍽️ <?= $pendingMeal ?> meal(s) ready to be served
 <?php endif; ?>
 
 </div>
@@ -128,97 +188,410 @@ Go Medication
 </a>
 <?php endif; ?>
 
-<?php if($pendingMeal > 0): ?>
-<a href="nurse_meal.php" class="btn btn-primary btn-sm">
-Go Meals
+</div>
+
+</div>
+<?php endif; ?>
+
+
+<div class="row g-3 mb-4">
+
+<!-- REALTIME -->
+
+<div class="col-md-3">
+
+<div class="realtime-card">
+
+<div id="currentDate" class="text-muted"></div>
+
+<h2 id="currentTime"></h2>
+
+<hr>
+
+<h5 class="fw-bold">
+Registered Hospital Patients
+</h5>
+
+<small class="text-muted">
+Real-time patient statistics
+</small>
+
+</div>
+
+</div>
+
+<!-- PATIENTS -->
+
+<div class="col-md-3">
+
+<div class="dashboard-card p-4 text-center">
+
+<i class="bi bi-people-fill text-primary fs-1"></i>
+
+<h6 class="mt-3">
+Active Patients
+</h6>
+
+<div class="stat-number">
+<?= $row1['TOTAL']; ?>
+</div>
+
+</div>
+
+</div>
+
+<!-- BEDS -->
+
+<div class="col-md-3">
+
+<div class="dashboard-card p-4 text-center">
+
+<i class="bi bi-hospital-fill text-success fs-1"></i>
+
+<h6 class="mt-3">
+Occupied Beds
+</h6>
+
+<div class="stat-number">
+<?= $row3['TOTAL']; ?>/<?= $totalBeds ?>
+</div>
+
+</div>
+
+</div>
+
+<!-- MEDICATION -->
+
+<div class="col-md-3">
+
+<div class="dashboard-card p-4 text-center">
+
+<i class="bi bi-capsule-pill text-danger fs-1"></i>
+
+<h6 class="mt-3">
+Pending Medication
+</h6>
+
+<div class="stat-number text-danger">
+<?= $pendingMed ?>
+</div>
+
+</div>
+
+</div>
+
+</div>
+
+<div class="section-card mb-4">
+
+<h4 class="mb-4">
+🩺 Patient Care Summary
+</h4>
+
+<div class="row">
+
+<div class="col-md-4">
+
+<div class="alert alert-danger">
+
+<h5>
+💊 Pending Medication
+</h5>
+
+<h2>
+<?= $pendingMed ?>
+</h2>
+
+</div>
+
+</div>
+
+<div class="col-md-4">
+
+<div class="alert alert-success">
+
+<h5>
+🛏 Occupied Beds
+</h5>
+
+<h2>
+<?= $row3['TOTAL']; ?>
+</h2>
+
+</div>
+
+</div>
+
+<div class="col-md-4">
+
+<div class="alert alert-primary">
+
+<h5>
+🏥 Active Wards
+</h5>
+
+<h2>
+<?= $activeWards ?>
+</h2>
+
+</div>
+
+</div>
+
+</div>
+
+<div class="mt-3">
+
+<a href="nurse_medication.php"
+class="btn btn-success">
+
+💊 Medication Tasks
+
 </a>
-<?php endif; ?>
+
+<a href="nurse_patients.php"
+class="btn btn-primary">
+
+👤 Patient Records
+
+</a>
 
 </div>
 
 </div>
-<?php endif; ?>
 
+<div class="section-card mb-4">
 
-<div class="row g-3">
+<div class="d-flex justify-content-between align-items-center mb-4">
 
-<!-- PATIENT -->
-<div class="col-md-4">
-<div class="card shadow card-box">
+<h4 class="mb-0">
+🏥 Recent Admissions
+</h4>
 
-<div class="icon blue">
-<i class="bi bi-people-fill"></i>
-</div>
-
-<h6>Total Patients</h6>
-<h3><?= $row1['TOTAL']; ?></h3>
-
-</div>
-</div>
-
-<!-- ADMISSION -->
-<div class="col-md-4">
-<div class="card shadow card-box">
-
-<div class="icon green">
-<i class="bi bi-hospital-fill"></i>
-</div>
-
-<h6>Admissions</h6>
-<h3><?= $row2['TOTAL']; ?></h3>
-
-</div>
-</div>
-
-<!-- BED -->
-<div class="col-md-4">
-<div class="card shadow card-box">
-
-<div class="icon red">
-<i class="bi bi-hospital"></i>
-</div>
-
-<h6>Occupied Beds</h6>
-<h3><?= $row3['TOTAL']; ?></h3>
-
-</div>
-</div>
+<span class="badge bg-primary fs-6">
+Latest 5 Admissions
+</span>
 
 </div>
 
+<div class="row">
+
+<?php while($r = $recentAdmissions->fetch(PDO::FETCH_ASSOC)): ?>
+
+<div class="col-md-6 mb-3">
+
+<div class="card border-0 shadow-sm">
+
+<div class="card-body">
+
+<div class="d-flex justify-content-between">
+
+<div>
+
+<h5 class="fw-bold mb-1">
+<?= $r['NAME'] ?>
+</h5>
+
+<small class="text-muted">
+Admission #<?= $r['ADMISSION_ID'] ?>
+</small>
+
+</div>
+
+<span class="badge bg-success">
+New
+</span>
+
+</div>
+
+<hr>
+
+<p class="mb-1">
+🏥 <?= $r['WARD_NAME'] ?>
+</p>
+
+<p class="mb-0">
+🛏 Bed <?= $r['BED_NUMBER'] ?>
+</p>
+
+</div>
+
+</div>
+
+</div>
+
+<?php endwhile; ?>
+
+</div>
+
+</div>
 <!-- TABLE -->
-<div class="card mt-4 p-3 shadow">
-<h5>Patient List</h5>
+<div class="section-card">
 
-<table class="table table-bordered mt-3">
+<div class="d-flex justify-content-between align-items-center mb-4">
 
-<thead class="table-dark">
-<tr>
-<th>Name</th>
-<th>Gender</th>
-<th>Admission ID</th>
-</tr>
-</thead>
+<h4>
+👤 Patient Records
+</h4>
 
-<tbody>
+<a href="nurse_patients.php"
+class="btn btn-primary">
 
-<?php while($row = $stmt->fetch(PDO::FETCH_ASSOC)) { ?>
-<tr>
-<td><?= $row['NAME']; ?></td>
-<td><?= $row['GENDER']; ?></td>
-<td><?= $row['ADMISSION_ID']; ?></td>
-</tr>
-<?php } ?>
+View All Patients
 
-</tbody>
+</a>
 
-</table>
+</div>
+
+<div class="row mb-4">
+
+<div class="col-md-5">
+
+<input
+type="text"
+class="form-control"
+placeholder="🔍 Search patient">
+
+</div>
+
+<div class="col-md-3">
+
+<select class="form-select">
+
+<option>All Gender</option>
+<option>Male</option>
+<option>Female</option>
+
+</select>
+
+</div>
+
+<div class="col-md-4">
+
+<select class="form-select">
+
+<option>Newest First</option>
+<option>Name A-Z</option>
+
+</select>
+
+</div>
+
+</div>
+
+<!-- PATIENT CARDS -->
+
+<div class="row">
+
+<?php
+
+$stmtPatient = $conn->query("
+
+SELECT
+p.NAME,
+p.GENDER,
+a.ADMISSION_ID
+
+FROM SYARMIMI.PATIENT p
+
+JOIN SYARMIMI.ADMISSION a
+ON p.PATIENT_ID = a.PATIENT_ID
+
+ORDER BY a.ADMISSION_ID DESC
+
+FETCH FIRST 6 ROWS ONLY
+
+");
+
+while($p = $stmtPatient->fetch(PDO::FETCH_ASSOC)):
+
+?>
+
+<div class="col-md-4 mb-3">
+
+<div class="card border-0 shadow-sm h-100">
+
+<div class="card-body">
+
+<div class="text-center">
+
+<div style="
+width:70px;
+height:70px;
+background:#dbeafe;
+border-radius:50%;
+margin:auto;
+display:flex;
+align-items:center;
+justify-content:center;
+font-size:30px;
+">
+
+👤
+
+</div>
+
+<h5 class="mt-3 fw-bold">
+
+<?= $p['NAME'] ?>
+
+</h5>
+
+<span class="badge bg-secondary">
+
+<?= $p['GENDER'] ?>
+
+</span>
+
+</div>
+
+<hr>
+
+<p class="mb-3">
+
+Admission ID:
+<b>#<?= $p['ADMISSION_ID'] ?></b>
+
+</p>
+
+<a href="nurse_patients.php"
+class="btn btn-outline-primary w-100">
+
+View Details
+
+</a>
 
 </div>
 
 </div>
 
 </div>
+
+<?php endwhile; ?>
+
+</div>
+
+</div>
+
+<script>
+
+function updateClock(){
+
+const now = new Date();
+
+document.getElementById("currentTime").innerHTML =
+now.toLocaleTimeString();
+
+document.getElementById("currentDate").innerHTML =
+now.toDateString();
+
+}
+
+setInterval(updateClock,1000);
+
+updateClock();
+
+</script>
 
 </body>
 </html>

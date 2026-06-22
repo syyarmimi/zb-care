@@ -27,7 +27,8 @@ if(isset($_POST['restock'])){
             ':id'=>$med_id
         ]);
 
-        echo "<script>alert('Stock Updated!'); window.location='pharmacy_inventory.php';</script>";
+        header("Location: pharmacy_inventory.php?restock=1");
+        exit();
     }
 }
 
@@ -48,11 +49,54 @@ SELECT MEDICATION_ID, MEDICATION_NAME, DESCRIPTION, DOSAGE_FORM, NVL(STOCK,0) AS
 FROM SYARMIMI.MEDICATION
 ORDER BY MEDICATION_NAME
 ");
+
+$totalMedication = $conn->query("
+SELECT COUNT(*)
+FROM SYARMIMI.MEDICATION
+")->fetchColumn();
+
+$availableStock = $conn->query("
+SELECT COUNT(*)
+FROM SYARMIMI.MEDICATION
+WHERE STOCK >= 10
+")->fetchColumn();
+
+$outOfStock = $conn->query("
+SELECT COUNT(*)
+FROM SYARMIMI.MEDICATION
+WHERE STOCK <= 0
+")->fetchColumn();
+
 ?>
 
 <!DOCTYPE html>
 <html>
 <head>
+
+<?php if(isset($_GET['restock'])): ?>
+
+<script>
+
+document.addEventListener('DOMContentLoaded', function(){
+
+Swal.fire({
+
+icon:'success',
+
+title:'Stock Updated',
+
+text:'Medication inventory has been updated successfully.',
+
+confirmButtonColor:'#198754'
+
+});
+
+});
+
+</script>
+
+<?php endif; ?>
+
 <title>Pharmacy Inventory</title>
 
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
@@ -69,6 +113,13 @@ body { background:#f4f6f9; }
 </style>
 </head>
 
+<link rel="stylesheet"
+href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css">
+
+<script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+<script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"></script>
+
 <body>
 
 <div class="d-flex">
@@ -77,7 +128,93 @@ body { background:#f4f6f9; }
 
 <div class="p-4 w-100">
 
-<h4 class="mb-3">📦 Pharmacy Inventory</h4>
+<div class="d-flex justify-content-between align-items-center mb-4">
+
+<div>
+
+<h3 class="fw-bold mb-0">
+📦 Pharmacy Inventory
+</h3>
+
+<small class="text-muted">
+Manage medication stock and inventory
+</small>
+
+</div>
+
+<div>
+
+<span class="badge bg-danger fs-6 p-2">
+Low Stock: <?= $lowStock ?>
+</span>
+
+</div>
+
+</div>
+
+<div class="row mb-4">
+
+<div class="col-md-4">
+
+<div class="card shadow border-0">
+
+<div class="card-body">
+
+<h6 class="text-muted">
+Total Medication
+</h6>
+
+<h2>
+<?= $totalMedication ?>
+</h2>
+
+</div>
+
+</div>
+
+</div>
+
+<div class="col-md-4">
+
+<div class="card shadow border-0">
+
+<div class="card-body">
+
+<h6 class="text-muted">
+Available
+</h6>
+
+<h2 class="text-success">
+<?= $availableStock ?>
+</h2>
+
+</div>
+
+</div>
+
+</div>
+
+<div class="col-md-4">
+
+<div class="card shadow border-0">
+
+<div class="card-body">
+
+<h6 class="text-muted">
+Out Of Stock
+</h6>
+
+<h2 class="text-danger">
+<?= $outOfStock ?>
+</h2>
+
+</div>
+
+</div>
+
+</div>
+
+</div>
 
 <!-- 🔔 LOW STOCK ALERT -->
 <?php if($lowStock > 0): ?>
@@ -88,9 +225,73 @@ body { background:#f4f6f9; }
 
 <div class="box">
 
-<table class="table table-bordered table-hover">
+<div class="row mb-3">
 
-<thead class="table-dark">
+<div class="col-md-4">
+
+<input
+type="text"
+id="searchInput"
+class="form-control"
+placeholder="🔍 Search medication">
+
+</div>
+
+<div class="col-md-3">
+
+<select
+id="statusFilter"
+class="form-select">
+
+<option value="">
+All Status
+</option>
+
+<option value="Available">
+Available
+</option>
+
+<option value="Low Stock">
+Low Stock
+</option>
+
+<option value="Out Of Stock">
+Out Of Stock
+</option>
+
+</select>
+
+</div>
+
+<div class="col-md-3">
+
+<select
+id="sortFilter"
+class="form-select">
+
+<option value="asc">
+A-Z Medication
+</option>
+
+<option value="desc">
+Z-A Medication
+</option>
+
+</select>
+
+</div>
+
+</div>
+
+<table
+id="inventoryTable"
+class="table table-hover align-middle">
+
+<thead style="
+background:#0f172a;
+color:white;
+">
+
 <tr>
 <th>ID</th>
 <th>Medication</th>
@@ -118,13 +319,48 @@ body { background:#f4f6f9; }
 <td><b><?= $row['STOCK'] ?></b></td>
 
 <td>
-<?php if($row['STOCK'] <= 0): ?>
-<span class="badge bg-danger">Out of Stock</span>
-<?php elseif($row['STOCK'] < 10): ?>
-<span class="badge bg-warning text-dark">Low</span>
-<?php else: ?>
-<span class="badge bg-success">Available</span>
-<?php endif; ?>
+
+<?php
+
+if($row['STOCK'] <= 0)
+{
+?>
+<span class="badge bg-danger">
+Out Of Stock
+</span>
+
+<span class="d-none">
+Out Of Stock
+</span>
+<?php
+}
+elseif($row['STOCK'] < 10)
+{
+?>
+<span class="badge bg-warning text-dark">
+Low Stock
+</span>
+
+<span class="d-none">
+Low Stock
+</span>
+<?php
+}
+else
+{
+?>
+<span class="badge bg-success">
+Available
+</span>
+
+<span class="d-none">
+Available
+</span>
+<?php
+}
+
+?>
+
 </td>
 
 <td>
@@ -134,8 +370,12 @@ body { background:#f4f6f9; }
 <input type="number" name="qty" class="form-control form-control-sm" 
 placeholder="Qty" min="1" required>
 
-<button name="restock" class="btn btn-primary btn-sm">
-Add
+<button
+name="restock"
+class="btn btn-success btn-sm">
+
+Restock
+
 </button>
 </form>
 </td>
@@ -153,6 +393,65 @@ Add
 </div>
 
 </div>
+
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+
+<script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+
+<script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"></script>
+
+<script>
+
+$(document).ready(function(){
+
+var table =
+$('#inventoryTable').DataTable({
+
+pageLength:10,
+
+lengthMenu:[
+[10,25,50,100],
+[10,25,50,100]
+],
+
+order:[[1,'asc']],
+
+dom:
+'t'
+
+});
+
+$('#searchInput').on('keyup', function(){
+
+table.search(this.value).draw();
+
+});
+
+$('#statusFilter').on('change', function(){
+
+table
+.column(5)
+.search(this.value)
+.draw();
+
+});
+
+$('#sortFilter').on('change', function(){
+
+if(this.value=='asc')
+{
+table.order([1,'asc']).draw();
+}
+else
+{
+table.order([1,'desc']).draw();
+}
+
+});
+
+});
+
+</script>
 
 </body>
 </html>

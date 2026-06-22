@@ -4,19 +4,143 @@ include("../config/config.php");
 
 if ($_SESSION['role'] != 'doctor') die("Access Denied");
 
+
 $doctor_id = $_SESSION['user_id'] ?? 0;
 
+$type = $_GET['type'] ?? '';
+$id   = $_GET['id'] ?? '';
+
+$appointmentPatient = null;
+$walkinPatient = null;
+
+if($type == 'appointment' && !empty($id))
+{
+    $stmt = $conn->prepare("
+        SELECT *
+        FROM SYARMIMI.APPOINTMENT
+        WHERE APPOINTMENT_ID = :id
+    ");
+
+    $stmt->execute([
+        ':id' => $id
+    ]);
+
+    $appointmentPatient = $stmt->fetch(PDO::FETCH_ASSOC);
+}
+
+if($walkinPatient)
+{
+    $patientInfo = [
+        'NAME' => $walkinPatient['NAME'],
+        'WARD_NAME' => 'Walk-In Patient',
+        'BED_NUMBER' => '-',
+        'ADMISSION_DATE' => date('d-M-Y')
+    ];
+}
+
+
+if($type == 'walkin' && !empty($id))
+{
+    $stmt = $conn->prepare("
+    SELECT
+        W.*,
+        P.*
+    FROM SYARMIMI.WALKIN_CONSULTATION W
+    JOIN SYARMIMI.PATIENT P
+    ON W.PATIENT_ID = P.PATIENT_ID
+    WHERE W.CONSULTATION_ID = :id
+    ");
+
+    $stmt->execute([
+        ':id' => $id
+    ]);
+
+    $walkinPatient = $stmt->fetch(PDO::FETCH_ASSOC);
+}
+
 /* ================= FETCH PATIENT ================= */
+/* ================= FETCH ADMISSION + APPOINTMENT ================= */
+
 $stmt = $conn->prepare("
-SELECT a.ADMISSION_ID, p.NAME 
-FROM SYARMIMI.ADMISSION a
-JOIN SYARMIMI.PATIENT p ON a.PATIENT_ID = p.PATIENT_ID
-WHERE a.STAFF_ID = :doctor
-AND a.DISCHARGE_DATE IS NULL
-ORDER BY a.ADMISSION_ID DESC
+SELECT
+    A.ADMISSION_ID AS RECORD_ID,
+    P.NAME,
+    NULL AS APPOINTMENT_TIME,
+    'ADMISSION' AS SOURCE_TYPE
+FROM SYARMIMI.ADMISSION A
+JOIN SYARMIMI.PATIENT P
+ON A.PATIENT_ID = P.PATIENT_ID
+WHERE A.ACCOUNT_ID = :doctor1
+AND A.DISCHARGE_DATE IS NULL
+
+UNION ALL
+
+SELECT
+    APPOINTMENT_ID,
+    PATIENT_NAME,
+    APPOINTMENT_TIME,
+    'APPOINTMENT'
+FROM SYARMIMI.APPOINTMENT
+WHERE ACCOUNT_ID = :doctor2
+AND STATUS='Approved'
+AND UPPER(APPOINTMENT_DATE) = UPPER(TO_CHAR(SYSDATE,'DD-MON-RR'))
+
+UNION ALL
+
+SELECT
+    W.CONSULTATION_ID,
+    P.NAME,
+    'Walk-In',
+    'WALKIN'
+FROM SYARMIMI.WALKIN_CONSULTATION W
+JOIN SYARMIMI.PATIENT P
+ON W.PATIENT_ID = P.PATIENT_ID
+WHERE W.ACCOUNT_ID = :doctor3
+AND TRIM(UPPER(W.STATUS))='ASSIGNED'
 ");
-$stmt->execute([':doctor'=>$doctor_id]);
+
+$stmt->execute([
+    ':doctor1'=>$doctor_id,
+    ':doctor2'=>$doctor_id,
+    ':doctor3'=>$doctor_id
+]);
+
 $patients = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+$todayAppointments = $conn->prepare("
+SELECT
+    APPOINTMENT_ID AS RECORD_ID,
+    PATIENT_NAME,
+    STATUS,
+    APPOINTMENT_TIME,
+    'APPOINTMENT' AS TYPE
+FROM SYARMIMI.APPOINTMENT
+WHERE ACCOUNT_ID = :doctor1
+AND STATUS = 'Approved'
+AND UPPER(APPOINTMENT_DATE) = UPPER(TO_CHAR(SYSDATE,'DD-MON-RR'))
+
+UNION ALL
+
+SELECT
+    W.CONSULTATION_ID AS RECORD_ID,
+    P.NAME AS PATIENT_NAME,
+    W.STATUS,
+    'Walk-In' AS APPOINTMENT_TIME,
+    'WALKIN' AS TYPE
+FROM SYARMIMI.WALKIN_CONSULTATION W
+JOIN SYARMIMI.PATIENT P
+ON W.PATIENT_ID = P.PATIENT_ID
+WHERE W.ACCOUNT_ID = :doctor2
+AND W.STATUS = 'Assigned'
+");
+
+$todayAppointments->execute([
+    ':doctor1' => $doctor_id,
+    ':doctor2' => $doctor_id
+]);
+
+$todayAppointments =
+$todayAppointments->fetchAll(PDO::FETCH_ASSOC);
 
 /* ================= FETCH MEDICATION ================= */
 $medications = $conn->query("
@@ -24,117 +148,466 @@ SELECT MEDICATION_ID, MEDICATION_NAME
 FROM SYARMIMI.MEDICATION
 ")->fetchAll(PDO::FETCH_ASSOC);
 
-/* ================= FETCH MENU + DIET ================= */
-$menus = $conn->query("
-SELECT M.MENUITEM_ID, M.FOOD_NAME, D.DIET_NAME
-FROM SYARMIMI.MENU_ITEM M
-LEFT JOIN SYARMIMI.DIET_TYPE D ON M.DIET_ID = D.DIET_ID
-")->fetchAll(PDO::FETCH_ASSOC);
+    /* ================= AVAILABLE BEDS ================= */
 
-/* ================= FETCH DIET ================= */
-$diets = $conn->query("
-SELECT DIET_ID, DIET_NAME 
-FROM SYARMIMI.DIET_TYPE
-")->fetchAll(PDO::FETCH_ASSOC);
+
+
+$availableBeds = [];
+
+
+
+$stmt = $conn->prepare("
+
+SELECT
+
+    B.BED_ID,
+
+    B.BED_NUMBER
+
+FROM SYARMIMI.BED B
+
+JOIN SYARMIMI.WARD W
+
+ON B.WARD_ID = W.WARD_ID
+
+JOIN SYARMIMI.HOSPITAL_STAFF H
+
+ON H.DEPARTMENT = W.WARD_NAME
+
+WHERE H.ACCOUNT_ID = :doctor
+
+AND B.STATUS = 'Available'
+
+");
+
+$stmt->execute([
+
+    ':doctor' => $doctor_id
+
+]);
+
+
+$availableBeds = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 /* ================= SELECTED PATIENT ================= */
-$selected_id = $_POST['admission_id'] ?? null;
-$patientInfo = null;
+$selected_id = null;
 
-if($selected_id){
-    $stmt = $conn->prepare("
-    SELECT P.NAME, W.WARD_NAME, B.BED_NUMBER, A.ADMISSION_DATE
-    FROM SYARMIMI.ADMISSION A
-    JOIN SYARMIMI.PATIENT P ON A.PATIENT_ID = P.PATIENT_ID
-    JOIN SYARMIMI.BED B ON A.BED_ID = B.BED_ID
-    JOIN SYARMIMI.WARD W ON B.WARD_ID = W.WARD_ID
-    WHERE A.ADMISSION_ID = :id
-    ");
-    $stmt->execute([':id'=>$selected_id]);
-    $patientInfo = $stmt->fetch(PDO::FETCH_ASSOC);
+if($type == 'appointment' && $appointmentPatient)
+{
+    $selected_id = $appointmentPatient['APPOINTMENT_ID'];
+}
+
+if($type == 'walkin' && $walkinPatient)
+{
+    $selected_id = $walkinPatient['CONSULTATION_ID'];
+}
+
+if(!$appointmentPatient)
+{
+    $patientInfo = null;
 }
 
 /* ================= SAVE ================= */
 if(isset($_POST['save_all'])){
 
-    $adm = $_POST['admission_id'];
+$patient_id = null;
+$appointment_id = null;
+$consultation_id = null;
 
-    /* ================= DIAGNOSIS ================= */
-    if(!empty($_POST['details'])){
-        $conn->prepare("
-        INSERT INTO SYARMIMI.DIAGNOSIS 
-        (Diagnosis_ID, Diagnosis_Details, Allergies, Date_Recorded, Diet_ID, Admission_ID, Staff_ID)
-        VALUES (
-            (SELECT NVL(MAX(DIAGNOSIS_ID),0)+1 FROM SYARMIMI.DIAGNOSIS),
-            :d, :a, SYSDATE, :diet, :adm, :staff
+if($type == 'appointment')
+{
+    $patient_id = $appointmentPatient['PATIENT_ID'];
+    $appointment_id = $appointmentPatient['APPOINTMENT_ID'];
+
+    if(empty($patient_id))
+    {
+        $stmt = $conn->prepare("
+        INSERT INTO SYARMIMI.PATIENT
+        (
+            PATIENT_ID,
+            NAME
         )
+        VALUES
+        (
+            (SELECT NVL(MAX(PATIENT_ID),0)+1
+            FROM SYARMIMI.PATIENT),
+            :name
+        )
+        ");
+
+        $stmt->execute([
+            ':name' => $appointmentPatient['PATIENT_NAME']
+        ]);
+
+        $patient_id = $conn->query("
+        SELECT MAX(PATIENT_ID)
+        FROM SYARMIMI.PATIENT
+        ")->fetchColumn();
+
+        $conn->prepare("
+        UPDATE SYARMIMI.APPOINTMENT
+        SET PATIENT_ID = :patient
+        WHERE APPOINTMENT_ID = :appointment
         ")->execute([
-            ':d'=>$_POST['details'],
-            ':a'=>$_POST['allergies'],
-            ':diet'=>$_POST['diet_id'],
-            ':adm'=>$adm,
-            ':staff'=>$doctor_id
+            ':patient' => $patient_id,
+            ':appointment' => $appointment_id
         ]);
     }
+}
+
+if($type == 'walkin')
+{
+    $patient_id =
+    $walkinPatient['PATIENT_ID'];
+
+    $consultation_id =
+    $walkinPatient['CONSULTATION_ID'];
+
+    $decision = $_POST['decision_type'];
+
+    $patientId = $walkinPatient['PATIENT_ID'];
+
+    $checkAdmission = $conn->prepare("
+SELECT COUNT(*)
+FROM SYARMIMI.ADMISSION
+WHERE PATIENT_ID = :patient
+AND DISCHARGE_DATE IS NULL
+");
+
+$checkAdmission->execute([
+    ':patient' => $patientId
+]);
+
+$existingAdmission =
+$checkAdmission->fetchColumn();
+
+   if(
+    $decision == 'Admit Patient'
+    &&
+    $existingAdmission == 0
+)
+{
+
+    
+        $bed_id = $_POST['bed_id'];
+
+        $patientId = $walkinPatient['PATIENT_ID'];
+
+        $checkAdmission = $conn->prepare("
+        SELECT COUNT(*)
+        FROM SYARMIMI.ADMISSION
+        WHERE PATIENT_ID = :patient
+        AND DISCHARGE_DATE IS NULL
+"       );
+
+        $checkAdmission->execute([
+        ':patient' => $patientId
+        ]);
+
+        $existingAdmission =
+        $checkAdmission->fetchColumn();
+
+        $conn->prepare("
+        INSERT INTO SYARMIMI.ADMISSION
+        (
+            ADMISSION_ID,
+            ADMISSION_DATE,
+            PATIENT_ID,
+            BED_ID,
+            ACCOUNT_ID,
+            IS_SEEN
+        )
+        VALUES
+        (
+            (SELECT NVL(MAX(ADMISSION_ID),0)+1
+            FROM SYARMIMI.ADMISSION),
+
+            SYSDATE,
+            :patient,
+            :bed,
+            :doctor,
+            1
+        )
+        ")->execute([
+            ':patient' => $patientId,
+            ':bed' => $bed_id,
+            ':doctor' => $doctor_id
+        ]);
+
+        $conn->prepare("
+        UPDATE SYARMIMI.BED
+        SET STATUS='Occupied'
+        WHERE BED_ID=:bed
+        ")->execute([
+            ':bed'=>$bed_id
+        ]);
+
+        $conn->prepare("
+        UPDATE SYARMIMI.WALKIN_CONSULTATION
+        SET STATUS='Admitted'
+        WHERE CONSULTATION_ID=:id
+        ")->execute([
+            ':id'=>$walkinPatient['CONSULTATION_ID']
+        ]);
+    }
+}
+
+
+
+/* ================= DIAGNOSIS ================= */
+if(!empty($_POST['details']))
+{
+    $checkDiagnosis = $conn->prepare("
+    SELECT COUNT(*)
+    FROM SYARMIMI.DIAGNOSIS
+    WHERE CONSULTATION_ID = :id
+    ");
+
+    $checkDiagnosis->execute([
+        ':id' => $consultation_id
+    ]);
+
+    $existsDiagnosis =
+    $checkDiagnosis->fetchColumn();
+
+    if($existsDiagnosis == 0)
+    {
+        $conn->prepare("
+        INSERT INTO SYARMIMI.DIAGNOSIS
+        (
+            DIAGNOSIS_ID,
+            PATIENT_ID,
+            APPOINTMENT_ID,
+            CONSULTATION_ID,
+            DIAGNOSIS_DETAILS,
+            ALLERGIES,
+            DATE_RECORDED,
+            ACCOUNT_ID
+        )
+        VALUES
+        (
+            (SELECT NVL(MAX(DIAGNOSIS_ID),0)+1
+            FROM SYARMIMI.DIAGNOSIS),
+
+            :patient,
+            :appointment,
+            :consultation,
+            :details,
+            :allergy,
+            SYSDATE,
+            :doctor
+        )
+        ")->execute([
+
+            ':patient' => $patient_id,
+            ':appointment' => $appointment_id,
+            ':consultation' => $consultation_id,
+            ':details' => $_POST['details'],
+            ':allergy' => $_POST['allergies'],
+            ':doctor' => $doctor_id
+
+        ]);
+    }
+}
 
     /* ================= MEDICATION ================= */
-    if(!empty($_POST['medication_id'])){
+if(!empty($_POST['medication_id']))
+{
+    foreach($_POST['medication_id'] as $index => $med)
+    {
+       if(empty($med))
+    {
+        continue;
+    }
+
+    $checkMed = $conn->prepare("
+    SELECT COUNT(*)
+    FROM SYARMIMI.MEDICATION_ORDER
+    WHERE CONSULTATION_ID = :consultation
+    AND MEDICATION_ID = :med
+    ");
+
+    $checkMed->execute([
+        ':consultation' => $consultation_id,
+        ':med' => $med
+    ]);
+
+    $existsMed =
+    $checkMed->fetchColumn();
+
+    if($existsMed == 0)
+    {
+        $dosage =
+        $_POST['dosage'][$index];
+
+        $frequency =
+        $_POST['frequency'][$index];
+
         $conn->prepare("
         INSERT INTO SYARMIMI.MEDICATION_ORDER
-        (MedOrder_ID, Admission_ID, Medication_ID, Dosage, Frequency, Staff_ID)
-        VALUES (
-            (SELECT NVL(MAX(MEDORDER_ID),0)+1 FROM SYARMIMI.MEDICATION_ORDER),
-            :adm, :med, :dos, :freq, :staff
+        (
+            MEDORDER_ID,
+            PATIENT_ID,
+            APPOINTMENT_ID,
+            CONSULTATION_ID,
+            MEDICATION_ID,
+            DOSAGE,
+            FREQUENCY,
+            ACCOUNT_ID
+        )
+        VALUES
+        (
+            (SELECT NVL(MAX(MEDORDER_ID),0)+1
+            FROM SYARMIMI.MEDICATION_ORDER),
+
+            :patient,
+            :appointment,
+            :consultation,
+            :med,
+            :dosage,
+            :frequency,
+            :doctor
         )
         ")->execute([
-            ':adm'=>$adm,
-            ':med'=>$_POST['medication_id'],
-            ':dos'=>$_POST['dosage'],
-            ':freq'=>$_POST['frequency'],
-            ':staff'=>$doctor_id
+
+            ':patient'=>$patient_id,
+            ':appointment'=>$appointment_id,
+            ':consultation'=>$consultation_id,
+            ':med'=>$med,
+            ':dosage'=>$dosage,
+            ':frequency'=>$frequency,
+            ':doctor'=>$doctor_id
+
+        ]);
+    }
+}
+
+/* ================= DECISION ================= */
+
+if($type == 'appointment')
+{
+    $decision = $_POST['decision_type'];
+
+    /* COMPLETED */
+
+    if($decision == 'Completed')
+    {
+        $conn->prepare("
+        UPDATE SYARMIMI.APPOINTMENT
+        SET STATUS = 'Completed'
+        WHERE APPOINTMENT_ID = :id
+        ")->execute([
+            ':id' => $id
         ]);
     }
 
-    /* ================= AUTO MEAL PLAN ================= */
-    if(!empty($_POST['diet_id'])){
+    /* NEXT APPOINTMENT */
+    elseif($decision == 'Next Appointment')
+{
+    $nextDate = $_POST['next_date'];
+    $nextTime = $_POST['next_time'];
 
-        $diet = $_POST['diet_id'];
+    $conn->prepare("
+    INSERT INTO SYARMIMI.APPOINTMENT
+    (
+        APPOINTMENT_ID,
+        PATIENT_ID,
+        PATIENT_NAME,
+        APPOINTMENT_DATE,
+        APPOINTMENT_TIME,
+        STATUS,
+        ACCOUNT_ID,
+        DOCTOR_NAME
+    )
+    VALUES
+    (
+        (SELECT NVL(MAX(APPOINTMENT_ID),0)+1
+        FROM SYARMIMI.APPOINTMENT),
 
-        $menuStmt = $conn->prepare("
-            SELECT MENUITEM_ID 
-            FROM SYARMIMI.MENU_ITEM
-            WHERE DIET_ID = :diet
-        ");
-        $menuStmt->execute([':diet'=>$diet]);
+        :patient,
+        :name,
+        :date,
+        :time,
+        'Approved',
+        :doctor,
+        :doctor_name
+    )
+    ")->execute([
 
-        $menuList = $menuStmt->fetchAll(PDO::FETCH_ASSOC);
+        ':patient' => $patient_id,
+        ':name' => $appointmentPatient['PATIENT_NAME'],
+        ':date' => $nextDate,
+        ':time' => $nextTime,
+        ':doctor' => $doctor_id,
+        ':doctor_name' => $appointmentPatient['DOCTOR_NAME']
 
-        $times = ['Breakfast', 'Lunch', 'Dinner'];
-        $i = 0;
+    ]);
 
-        foreach($times as $time){
+    $conn->prepare("
+    UPDATE SYARMIMI.APPOINTMENT
+    SET STATUS='Completed'
+    WHERE APPOINTMENT_ID=:id
+    ")->execute([
+        ':id'=>$id
+    ]);
+}
 
-            if(isset($menuList[$i])){
+    /* ADMIT PATIENT */
 
-                $conn->prepare("
-                INSERT INTO SYARMIMI.MEAL_PLAN
-                (MealPlan_ID, Admission_ID, MenuItem_ID, Meal_Date, MealTime_Slot)
-                VALUES (
-                    (SELECT NVL(MAX(MEALPLAN_ID),0)+1 FROM SYARMIMI.MEAL_PLAN),
-                    :adm, :menu, SYSDATE, :time
-                )
-                ")->execute([
-                    ':adm'=>$adm,
-                    ':menu'=>$menuList[$i]['MENUITEM_ID'],
-                    ':time'=>$time
-                ]);
+elseif($decision == 'Admit Patient')
+{
+    $bed_id = $_POST['bed_id'];
 
-                $i++;
-            }
-        }
-    }
+    $patientId = $appointmentPatient['PATIENT_ID'];
 
-    echo "<script>alert('Treatment Saved!'); window.location='treatment.php';</script>";
+    $conn->prepare("
+    INSERT INTO SYARMIMI.ADMISSION
+    (
+        ADMISSION_ID,
+        ADMISSION_DATE,
+        PATIENT_ID,
+        BED_ID,
+        ACCOUNT_ID,
+        IS_SEEN
+    )
+    VALUES
+    (
+        (SELECT NVL(MAX(ADMISSION_ID),0)+1
+        FROM SYARMIMI.ADMISSION),
+
+        SYSDATE,
+        :patient,
+        :bed,
+        :doctor,
+        0
+    )
+    ")->execute([
+        ':patient' => $patientId,
+        ':bed' => $bed_id,
+        ':doctor' => $doctor_id
+    ]);
+
+    $conn->prepare("
+    UPDATE SYARMIMI.BED
+    SET STATUS='Occupied'
+    WHERE BED_ID=:bed
+    ")->execute([
+        ':bed' => $bed_id
+    ]);
+
+    $conn->prepare("
+    UPDATE SYARMIMI.APPOINTMENT
+    SET STATUS='Admitted'
+    WHERE APPOINTMENT_ID=:id
+    ")->execute([
+        ':id' => $id
+    ]);
+}
+
+    header("Location: treatment.php");
+    exit;
+}
+}
 }
 ?>
 
@@ -144,6 +617,8 @@ if(isset($_POST['save_all'])){
 <title>Treatment</title>
 
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+<link rel="stylesheet"
+href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
 
 <style>
 body { background:#eef2f7; }
@@ -190,23 +665,100 @@ button {
 
 <h4 class="mb-4">🧾 Patient Treatment</h4>
 
-<form method="POST">
+<?php if($appointmentPatient): ?>
 
-<!-- SELECT PATIENT -->
+<div class="card-box patient-info">
+
+<h5>
+📅 Appointment Patient
+</h5>
+
+<b>
+<?= $appointmentPatient['PATIENT_NAME'] ?>
+</b>
+
+<br>
+
+Doctor:
+<?= $appointmentPatient['DOCTOR_NAME'] ?>
+
+<br>
+
+Date:
+<?= $appointmentPatient['APPOINTMENT_DATE'] ?>
+
+<br>
+
+Time:
+<?= $appointmentPatient['APPOINTMENT_TIME'] ?>
+
+</div>
+
+<?php endif; ?>
+
+<?php if(!$appointmentPatient): ?>
+
 <div class="card-box">
-<div class="section-title">Select Patient</div>
 
-<select name="admission_id" class="form-control" onchange="this.form.submit()" required>
-<option value="">Select Patient</option>
+<h5>
+📋 Today's Appointment Queue
+</h5>
 
-<?php foreach($patients as $p): ?>
-<option value="<?= $p['ADMISSION_ID'] ?>" <?= ($selected_id==$p['ADMISSION_ID'])?'selected':'' ?>>
-<?= $p['NAME'] ?> (ID: <?= $p['ADMISSION_ID'] ?>)
-</option>
+<div class="table-responsive">
+
+</div>
+
+<table class="table table-bordered">
+
+<tr>
+<th class="text-center">Time</th>
+<th class="text-center">Patient</th>
+<th class="text-center">Action</th>
+</tr>
+
+<?php foreach($todayAppointments as $row): ?>
+
+<tr>
+
+<td class="text-center">
+<?= $row['APPOINTMENT_TIME'] ?>
+</td>
+
+<td>
+<?= $row['PATIENT_NAME'] ?>
+(<?= $row['STATUS'] ?? '' ?>)
+</td>
+
+<td class="text-center">
+
+<?php if($row['TYPE']=='APPOINTMENT'): ?>
+
+<a href="treatment.php?type=appointment&id=<?= $row['RECORD_ID'] ?>"
+class="btn btn-primary btn-sm">
+Diagnose
+</a>
+
+<?php else: ?>
+
+<a href="treatment.php?type=walkin&id=<?= $row['RECORD_ID'] ?>"
+class="btn btn-warning btn-sm">
+Diagnose
+</a>
+
+<?php endif; ?>
+
+</td>
+
+</tr>
+
 <?php endforeach; ?>
 
-</select>
+</table>
+
 </div>
+
+<?php endif; ?>
+<form method="POST">
 
 <!-- PATIENT INFO -->
 <?php if($patientInfo): ?>
@@ -216,6 +768,7 @@ button {
 📅 <?= $patientInfo['ADMISSION_DATE'] ?>
 </div>
 <?php endif; ?>
+
 
 <!-- DIAGNOSIS -->
 <div class="card-box">
@@ -228,41 +781,220 @@ button {
 <input name="allergies" class="form-control" placeholder="Allergies">
 </div>
 <div class="col-md-6">
-<select name="diet_id" class="form-control">
-<option value="">Select Diet</option>
-<?php foreach($diets as $d): ?>
-<option value="<?= $d['DIET_ID'] ?>">
-<?= $d['DIET_NAME'] ?>
+<select name="admission_id" class="form-control">
+<option value="">
+Select Admission / Appointment
+</option>
+
+<?php
+
+$selectedRecord = '';
+
+if($type == 'appointment' && $appointmentPatient)
+{
+    $selectedRecord = $appointmentPatient['APPOINTMENT_ID'];
+}
+
+if($type == 'walkin' && $walkinPatient)
+{
+    $selectedRecord = $walkinPatient['CONSULTATION_ID'];
+}
+
+?>
+<?php foreach($patients as $p): ?>
+
+<option
+value="<?= $p['RECORD_ID'] ?>"
+<?= ($selectedRecord == $p['RECORD_ID']) ? 'selected' : '' ?>
+>
+
+<?php
+if(
+$type=='appointment'
+&&
+$appointmentPatient
+&&
+$p['NAME']==$appointmentPatient['PATIENT_NAME']
+){
+echo 'selected';
+}
+?>
+
+<?= $p['NAME'] ?>
+
+<?php if($p['APPOINTMENT_TIME']): ?>
+(<?= $p['APPOINTMENT_TIME'] ?>)
+<?php endif; ?>
+
 </option>
 <?php endforeach; ?>
 </select>
 </div>
 </div>
+</div>
+
+<div class="card-box">
+
+<div class="section-title">
+🏥 Admission Decision
+</div>
+
+<select
+name="decision_type"
+id="decision_type"
+class="form-control">
+
+<option value="">
+Select Decision
+</option>
+
+<option value="Completed">
+Completed
+</option>
+
+<option value="Next Appointment">
+Next Appointment
+</option>
+
+<option value="Admit Patient">
+Admit Patient
+</option>
+
+</select>
+
+<div id="bedBox" style="display:none; margin-top:20px;">
+
+<label class="mb-2">
+Select Bed
+</label>
+
+<select
+name="bed_id"
+class="form-control">
+
+<option value="">
+Select Bed
+</option>
+
+<?php foreach($availableBeds as $bed): ?>
+
+<option value="<?= $bed['BED_ID'] ?>">
+Bed <?= $bed['BED_NUMBER'] ?>
+</option>
+
+<?php endforeach; ?>
+
+</select>
+
+</div>
+
+</div>
+
+<div id="nextAppointmentBox" style="display:none; margin-top:20px;">
+
+<div class="row">
+
+<div class="col-md-6">
+<label>Next Appointment Date</label>
+
+<input
+type="date"
+name="next_date"
+class="form-control">
+</div>
+
+<div class="col-md-6">
+<label>Next Appointment Time</label>
+
+<select
+name="next_time"
+class="form-control">
+
+<option value="">Select Time</option>
+<option value="08:00">08:00</option>
+<option value="09:00">09:00</option>
+<option value="10:00">10:00</option>
+<option value="11:00">11:00</option>
+<option value="12:00">12:00</option>
+<option value="14:00">14:00</option>
+<option value="15:00">15:00</option>
+<option value="16:00">16:00</option>
+
+</select>
+
+</div>
+
+</div>
+
 </div>
 
 <!-- MEDICATION -->
 <div class="card-box">
-<div class="section-title">💊 Medication</div>
 
-<select name="medication_id" class="form-control mb-3">
-<option value="">Select Medication</option>
+<div class="section-title">
+💊 Medication Prescription
+</div>
+
+<div id="medicationContainer">
+
+<div class="row medicationRow mb-3">
+
+<div class="col-md-4">
+
+<select
+name="medication_id[]"
+class="form-control">
+
+<option value="">
+Select Medication
+</option>
+
 <?php foreach($medications as $m): ?>
+
 <option value="<?= $m['MEDICATION_ID'] ?>">
 <?= $m['MEDICATION_NAME'] ?>
 </option>
+
 <?php endforeach; ?>
+
 </select>
 
-<div class="row">
-<div class="col-md-6">
-<input name="dosage" class="form-control" placeholder="Dosage">
-</div>
-<div class="col-md-6">
-<input name="frequency" class="form-control" placeholder="Frequency">
-</div>
-</div>
 </div>
 
+<div class="col-md-4">
+
+<input
+type="text"
+name="dosage[]"
+class="form-control"
+placeholder="Example: 500mg">
+
+</div>
+
+<div class="col-md-4">
+
+<input
+type="text"
+name="frequency[]"
+class="form-control"
+placeholder="Example: 1 tablet TDS after meal">
+
+</div>
+
+</div>
+
+</div>
+
+<button
+type="button"
+id="addMedication"
+class="btn btn-success btn-sm">
+
+➕ Add Medication
+
+</button>
+
+</div>
 <!-- BUTTON -->
 <button name="save_all" class="btn btn-primary w-100">
 💾 Save Treatment
@@ -272,6 +1004,121 @@ button {
 
 </div>
 </div>
+
+<script>
+
+document.addEventListener("DOMContentLoaded", function(){
+
+    let decision =
+    document.getElementById("decision_type");
+
+    let box =
+    document.getElementById("nextAppointmentBox");
+
+    let bedBox =
+    document.getElementById("bedBox");
+
+    decision.addEventListener("change", function(){
+
+        box.style.display = "none";
+        bedBox.style.display = "none";
+
+        if(this.value == "Next Appointment")
+        {
+            box.style.display = "block";
+        }
+
+        if(this.value == "Admit Patient")
+        {
+            bedBox.style.display = "block";
+        }
+
+    });
+
+});
+
+</script>
+
+<script>
+
+document.getElementById("addMedication").addEventListener("click", function(){
+
+let html = `
+<div class="row medicationRow mb-3">
+
+<div class="col-md-4">
+
+<select
+name="medication_id[]"
+class="form-control">
+
+<option value="">
+Select Medication
+</option>
+
+<?php foreach($medications as $m): ?>
+
+<option value="<?= $m['MEDICATION_ID'] ?>">
+<?= $m['MEDICATION_NAME'] ?>
+</option>
+
+<?php endforeach; ?>
+
+</select>
+
+</div>
+
+<div class="col-md-3">
+
+<input
+type="text"
+name="dosage[]"
+class="form-control"
+placeholder="Example: 500mg">
+
+</div>
+
+<div class="col-md-3">
+
+<input
+type="text"
+name="frequency[]"
+class="form-control"
+placeholder="Example: 1 tablet TDS after meal">
+
+</div>
+
+<div class="col-md-2">
+
+<button
+type="button"
+class="btn btn-danger removeMedication">
+
+❌
+
+</button>
+
+</div>
+
+</div>
+`;
+
+document
+.getElementById("medicationContainer")
+.insertAdjacentHTML("beforeend", html);
+
+});
+
+document.addEventListener("click", function(e){
+
+if(e.target.classList.contains("removeMedication"))
+{
+e.target.closest(".medicationRow").remove();
+}
+
+});
+
+</script>
 
 </body>
 </html>

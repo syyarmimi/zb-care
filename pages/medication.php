@@ -70,8 +70,27 @@ if(isset($_POST['update'])){
 }
 
 /* ================= FETCH ================= */
-$stmt = $conn->query("SELECT * FROM SYARMIMI.MEDICATION ORDER BY MEDICATION_ID");
+
+$search = $_GET['search'] ?? '';
+
+$sort = ($_GET['sort'] ?? 'ASC') == 'DESC'
+    ? 'DESC'
+    : 'ASC';
+
+$stmt = $conn->prepare("
+SELECT *
+FROM SYARMIMI.MEDICATION
+WHERE LOWER(MEDICATION_NAME)
+LIKE LOWER(:search)
+ORDER BY MEDICATION_NAME $sort
+");
+
+$stmt->execute([
+    ':search' => '%' . $search . '%'
+]);
+
 $medications = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
 ?>
 
 <!DOCTYPE html>
@@ -115,6 +134,55 @@ Add Medication
 </button>
 
 </form>
+</div>
+
+<div class="box mb-4">
+
+<form method="GET">
+
+<div class="row">
+
+<div class="col-md-8">
+
+<input
+type="text"
+name="search"
+class="form-control"
+placeholder="Search Medication..."
+value="<?= htmlspecialchars($search) ?>">
+
+</div>
+
+<div class="col-md-2">
+
+<select name="sort" class="form-control">
+
+<option value="ASC"
+<?= ($sort=='ASC') ? 'selected' : '' ?>>
+Ascending
+</option>
+
+<option value="DESC"
+<?= ($sort=='DESC') ? 'selected' : '' ?>>
+Descending
+</option>
+
+</select>
+
+</div>
+
+<div class="col-md-2">
+
+<button class="btn btn-primary w-100">
+Search
+</button>
+
+</div>
+
+</div>
+
+</form>
+
 </div>
 
 <!-- TABLE -->

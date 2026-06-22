@@ -3,6 +3,8 @@ if (session_status() == PHP_SESSION_NONE) {
     session_start();
 }
 
+include("../config/config.php");
+
 $current = basename($_SERVER['PHP_SELF']);
 ?>
 
@@ -42,14 +44,19 @@ class="nav-link text-white">
 <div id="patientMenu" class="submenu"
 style="display: <?= in_array($current, ['patient.php','admission.php','ward.php','bed.php']) ? 'block' : 'none' ?>">
 
-<a href="patient.php"
-class="nav-link text-white <?= ($current == 'patient.php') ? 'bg-primary rounded' : '' ?>">
-👤 Register Patient
+  <a href="patient_management.php"
+class="nav-link text-white <?= ($current == 'patient_management.php') ? 'bg-primary rounded' : '' ?>">
+🏠 Patient Management
+</a>
+
+<a href="walkin_consultation.php"
+class="nav-link text-white <?= ($current == 'walkin_consultation.php') ? 'bg-primary rounded' : '' ?>">
+🩺 Walk-In Consultation
 </a>
 
 <a href="admission.php"
 class="nav-link text-white <?= ($current == 'admission.php') ? 'bg-primary rounded' : '' ?>">
-🏥 Admission
+👤 Register & Admit
 </a>
 
 <a href="ward.php"
@@ -58,6 +65,7 @@ class="nav-link text-white <?= ($current == 'ward.php') ? 'bg-primary rounded' :
 </a>
 
 </div>
+
 </li>
 
 <!-- STAFF -->
@@ -68,8 +76,44 @@ class="nav-link text-white <?= ($current == 'staff.php') ? 'bg-primary rounded' 
 </a>
 </li>
 
-<!-- 🔥 FIXED MEDICATION MENU -->
+<!-- DOCTOR AVAILABILITY -->
+<li class="mb-1">
+<a href="doctor_availability_admin.php"
+class="nav-link text-white <?= ($current == 'doctor_availability_admin.php') ? 'bg-primary rounded' : '' ?>">
+📅 Doctor Availability
+</a>
+</li>
 
+<!-- 🔥 APPOINTMENT -->
+<li class="mb-1">
+
+<a href="admin_appointment.php"
+class="nav-link text-white d-flex justify-content-between align-items-center <?= ($current == 'admin_appointment.php') ? 'bg-primary rounded' : '' ?>">
+
+<span>📅 Appointments</span>
+
+<?php
+$apptCount = $conn->query("
+SELECT COUNT(*)
+FROM SYARMIMI.APPOINTMENT
+WHERE STATUS='Pending'
+")->fetchColumn();
+
+if($apptCount > 0):
+?>
+
+<span class="badge bg-danger">
+<?= $apptCount ?>
+</span>
+
+<?php endif; ?>
+
+</a>
+
+</li>
+
+
+<!-- MEDICATION -->
 <li class="mb-1">
 <a href="medication.php"
 class="nav-link text-white <?= ($current == 'medication.php') ? 'bg-primary rounded' : '' ?>">
@@ -77,19 +121,11 @@ class="nav-link text-white <?= ($current == 'medication.php') ? 'bg-primary roun
 </a>
 </li>
 
-<!-- MEAL -->
+<!-- MEDICATION DELIVERY -->
 <li class="mb-1">
 <a href="med.php"
 class="nav-link text-white <?= ($current == 'med.php') ? 'bg-primary rounded' : '' ?>">
 🚚 Medication Delivery
-</a>
-</li>
-
-<!-- MEAL -->
-<li class="mb-1">
-<a href="meal.php"
-class="nav-link text-white <?= ($current == 'meal.php') ? 'bg-primary rounded' : '' ?>">
-🍽️ Meal Delivery
 </a>
 </li>
 
@@ -106,13 +142,27 @@ class="nav-link text-white <?= ($current == 'meal.php') ? 'bg-primary rounded' :
 
 <!-- 🔥 TOGGLE SCRIPT -->
 <script>
+
 function togglePatientMenu() {
+
     var menu = document.getElementById("patientMenu");
-    menu.style.display = (menu.style.display === "block") ? "none" : "block";
+
+    menu.style.display =
+    (menu.style.display === "block")
+    ? "none"
+    : "block";
 }
 
 function toggleMedicationMenu() {
+
     var menu = document.getElementById("medicationMenu");
-    menu.style.display = (menu.style.display === "block") ? "none" : "block";
+
+    if(menu){
+        menu.style.display =
+        (menu.style.display === "block")
+        ? "none"
+        : "block";
+    }
 }
+
 </script>
