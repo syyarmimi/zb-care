@@ -23,7 +23,7 @@ SELECT
     P.NAME,
     W.WARD_NAME,
     B.BED_NUMBER,
-    A.ADMISSION_DATE
+    TO_CHAR(A.ADMISSION_DATE,'DD-MON-YYYY') AS ADMISSION_DATE
 
 FROM SYARMIMI.ADMISSION A
 
@@ -70,6 +70,48 @@ $currentList =
 $currentPatients->fetchAll(PDO::FETCH_ASSOC);
 
 /* ======================================
+   WALK-IN PATIENTS
+====================================== */
+
+$walkinPatients = $conn->query("
+
+SELECT
+    W.CONSULTATION_ID,
+    P.NAME,
+    TO_CHAR(W.CONSULTATION_DATE,'DD-MON-YYYY') AS CONSULTATION_DATE
+
+FROM SYARMIMI.WALKIN_CONSULTATION W
+
+JOIN SYARMIMI.PATIENT P
+ON W.PATIENT_ID = P.PATIENT_ID
+
+ORDER BY W.CONSULTATION_ID DESC
+
+")->fetchAll(PDO::FETCH_ASSOC);
+
+/* ======================================
+   APPOINTMENT PATIENTS
+====================================== */
+
+$appointmentPatients = $conn->query("
+
+SELECT
+    A.APPOINTMENT_ID,
+    P.NAME,
+    A.APPOINTMENT_DATE,
+    A.DEPARTMENT,
+    A.STATUS
+
+FROM SYARMIMI.APPOINTMENT A
+
+JOIN SYARMIMI.PATIENT P
+ON A.PATIENT_ID = P.PATIENT_ID
+
+ORDER BY A.APPOINTMENT_ID DESC
+
+")->fetchAll(PDO::FETCH_ASSOC);
+
+/* ======================================
    DIAGNOSED PATIENTS
 ====================================== */
 
@@ -79,7 +121,7 @@ SELECT
     D.DIAGNOSIS_ID,
     P.NAME,
     D.DIAGNOSIS_DETAILS,
-    D.DATE_RECORDED
+    TO_CHAR(D.DATE_RECORDED,'DD-MON-YYYY') AS DATE_RECORDED
 
 FROM SYARMIMI.DIAGNOSIS D
 
@@ -127,8 +169,8 @@ $sql = "
 
 SELECT
     P.NAME,
-    A.ADMISSION_DATE,
-    A.DISCHARGE_DATE
+    TO_CHAR(A.ADMISSION_DATE,'DD-MON-YYYY') AS ADMISSION_DATE,
+    TO_CHAR(A.DISCHARGE_DATE,'DD-MON-YYYY') AS DISCHARGE_DATE
 
 FROM SYARMIMI.ADMISSION A
 
@@ -277,6 +319,16 @@ body{
     background:#f8fafc;
 }
 
+#searchBox{
+height:45px;
+border-radius:10px;
+}
+
+.form-select{
+height:45px;
+border-radius:10px;
+}
+
 </style>
 
 </head>
@@ -347,32 +399,39 @@ if($role == 'admin'){
 type="text"
 id="searchBox"
 class="form-control"
-placeholder="Search patient name...">
+placeholder="🔍 Search patient or medication">
 
 </div>
 
 <div class="col-md-3">
 
 <select
-id="monthFilter"
+id="typeFilter"
 class="form-select">
 
 <option value="">
-All Months
+All Types
 </option>
 
-<option value="01">January</option>
-<option value="02">February</option>
-<option value="03">March</option>
-<option value="04">April</option>
-<option value="05">May</option>
-<option value="06">June</option>
-<option value="07">July</option>
-<option value="08">August</option>
-<option value="09">September</option>
-<option value="10">October</option>
-<option value="11">November</option>
-<option value="12">December</option>
+<option value="current">
+Current Patient
+</option>
+
+<option value="walkin">
+Walk-In
+</option>
+
+<option value="appointment">
+Appointment
+</option>
+
+<option value="diagnosed">
+Diagnosed
+</option>
+
+<option value="discharged">
+Discharged
+</option>
 
 </select>
 
@@ -384,20 +443,20 @@ All Months
 id="sortOrder"
 class="form-select">
 
+<option value="latest">
+Newest First
+</option>
+
+<option value="oldest">
+Oldest First
+</option>
+
 <option value="asc">
 Name A-Z
 </option>
 
 <option value="desc">
 Name Z-A
-</option>
-
-<option value="latest">
-Latest Admission
-</option>
-
-<option value="oldest">
-Oldest Admission
 </option>
 
 </select>
@@ -422,6 +481,32 @@ data-bs-toggle="tab"
 data-bs-target="#current">
 
 Current Patients
+
+</button>
+
+</li>
+
+<li class="nav-item">
+
+<button
+class="nav-link"
+data-bs-toggle="tab"
+data-bs-target="#walkin">
+
+Walk-In Patients
+
+</button>
+
+</li>
+
+<li class="nav-item">
+
+<button
+class="nav-link"
+data-bs-toggle="tab"
+data-bs-target="#appointment">
+
+Appointment Patients
 
 </button>
 
@@ -511,7 +596,194 @@ View Details
 
 </table>
 
+<div class="d-flex justify-content-between align-items-center mt-3">
+
+<div>
+Showing 1 to <?= count($currentList) ?> entries
 </div>
+
+<nav>
+
+<ul class="pagination mb-0">
+
+<li class="page-item disabled">
+<a class="page-link">
+Previous
+</a>
+</li>
+
+<li class="page-item active">
+<a class="page-link">
+1
+</a>
+</li>
+
+<li class="page-item disabled">
+<a class="page-link">
+Next
+</a>
+</li>
+
+</ul>
+
+</nav>
+
+</div>
+
+</div>
+
+<div
+class="tab-pane fade"
+id="walkin">
+
+<table class="table table-bordered">
+
+<thead>
+
+<tr>
+<th>Patient</th>
+<th>Date</th>
+</tr>
+
+</thead>
+
+<tbody>
+
+<?php foreach($walkinPatients as $w): ?>
+
+<tr>
+
+<td><?= $w['NAME'] ?></td>
+
+<td><?= $w['CONSULTATION_DATE'] ?></td>
+
+</tr>
+
+<?php endforeach; ?>
+
+</tbody>
+
+</table>
+
+<div class="d-flex justify-content-between align-items-center mt-3">
+
+<div>
+Showing 1 to <?= count($walkinPatients) ?> entries
+</div>
+
+<nav>
+<ul class="pagination mb-0">
+
+<li class="page-item disabled">
+<a class="page-link">Previous</a>
+</li>
+
+<li class="page-item active">
+<a class="page-link">1</a>
+</li>
+
+<li class="page-item disabled">
+<a class="page-link">Next</a>
+</li>
+
+</ul>
+</nav>
+
+</div>
+
+</div>
+
+<div
+class="tab-pane fade"
+id="appointment">
+
+<table class="table table-bordered">
+
+<thead>
+
+<tr>
+<th>Patient</th>
+<th>Date</th>
+<th>Department</th>
+<th>Status</th>
+</tr>
+
+</thead>
+
+<tbody>
+
+<?php foreach($appointmentPatients as $a): ?>
+
+<tr>
+
+<td><?= $a['NAME'] ?></td>
+
+<td><?= $a['APPOINTMENT_DATE'] ?></td>
+
+<td><?= $a['DEPARTMENT'] ?></td>
+
+<td><?= $a['STATUS'] ?></td>
+
+</tr>
+
+<?php endforeach; ?>
+
+</tbody>
+
+</table>
+
+<div class="d-flex justify-content-between mt-3">
+
+
+
+<div>
+
+Showing 1 to <?= count($appointmentPatients) ?> entries
+
+</div>
+
+
+
+<nav>
+
+<ul class="pagination mb-0">
+
+
+
+<li class="page-item disabled">
+
+<a class="page-link">Previous</a>
+
+</li>
+
+
+
+<li class="page-item active">
+
+<a class="page-link">1</a>
+
+</li>
+
+
+
+<li class="page-item disabled">
+
+<a class="page-link">Next</a>
+
+</li>
+
+
+
+</ul>
+
+</nav>
+
+
+
+</div>
+
+</div>
+
 
 <!-- DIAGNOSED -->
 
@@ -554,6 +826,30 @@ id="diagnosedTable">
 </tbody>
 
 </table>
+
+<div class="d-flex justify-content-between align-items-center mt-3">
+
+<div>
+Showing 1 to <?= count($diagnosedList) ?> entries
+</div>
+
+<nav>
+<ul class="pagination mb-0">
+
+<li class="page-item disabled">
+<a class="page-link">Previous</a>
+</li>
+
+<li class="page-item active">
+<a class="page-link">1</a>
+</li>
+
+<li class="page-item disabled">
+<a class="page-link">Next</a>
+</li>
+
+</ul>
+</nav>
 
 </div>
 
@@ -617,6 +913,32 @@ strtotime($d['ADMISSION_DATE'])
 
 </table>
 
+<div class="d-flex justify-content-between align-items-center mt-3">
+
+<div>
+Showing 1 to <?= count($dischargedList) ?> entries
+</div>
+
+<nav>
+<ul class="pagination mb-0">
+
+<li class="page-item disabled">
+<a class="page-link">Previous</a>
+</li>
+
+<li class="page-item active">
+<a class="page-link">1</a>
+</li>
+
+<li class="page-item disabled">
+<a class="page-link">Next</a>
+</li>
+
+</ul>
+</nav>
+
+</div>
+
 </div>
 
 </div>
@@ -653,49 +975,31 @@ row.innerText
 
 });
 
-/* MONTH FILTER */
-
 document
-.getElementById('monthFilter')
+.getElementById('typeFilter')
 .addEventListener('change', function(){
 
-let month =
-this.value;
+let type = this.value;
 
-document
-.querySelectorAll('#currentTable tbody tr')
-.forEach(function(row){
-
-let dateText =
-row.cells[3].innerText;
-
-if(month == ''){
-
-row.style.display = '';
-
-return;
-
+if(type == 'current'){
+    document.querySelector('[data-bs-target="#current"]').click();
 }
 
-let rowMonth =
-new Date(dateText)
-.getMonth() + 1;
-
-rowMonth =
-String(rowMonth)
-.padStart(2,'0');
-
-if(rowMonth == month){
-
-row.style.display = '';
-
-}else{
-
-row.style.display = 'none';
-
+if(type == 'walkin'){
+    document.querySelector('[data-bs-target="#walkin"]').click();
 }
 
-});
+if(type == 'appointment'){
+    document.querySelector('[data-bs-target="#appointment"]').click();
+}
+
+if(type == 'diagnosed'){
+    document.querySelector('[data-bs-target="#diagnosed"]').click();
+}
+
+if(type == 'discharged'){
+    document.querySelector('[data-bs-target="#discharged"]').click();
+}
 
 });
 

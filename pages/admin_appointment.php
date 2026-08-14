@@ -281,6 +281,8 @@ $stmt = $conn->query($sql);
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 
 <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons/font/bootstrap-icons.css" rel="stylesheet">
+<link rel="stylesheet"
+href="https://cdn.datatables.net/1.13.8/css/dataTables.bootstrap5.min.css">
 
 <style>
 
@@ -385,6 +387,29 @@ body{
 .table tbody tr:hover{
     background:#f8fafc;
     transition:0.2s;
+}
+
+.dataTables_filter{
+    display:none;
+}
+
+.dataTables_info{
+    margin-top:15px;
+}
+
+.dataTables_paginate{
+    margin-top:15px;
+}
+
+.dataTables_wrapper .dataTables_paginate .paginate_button.current{
+    background:#2563eb !important;
+    color:white !important;
+    border:none !important;
+}
+
+.dataTables_wrapper .dataTables_paginate .paginate_button:hover{
+    background:#2563eb !important;
+    color:white !important;
 }
 
 </style>
@@ -720,9 +745,69 @@ View Schedule
 
 <div class="table-box">
 
+<div class="row mb-4">
+
+<div class="col-md-4">
+
+<input
+type="text"
+id="appointmentSearch"
+class="form-control"
+placeholder="🔍 Search Appointment">
+
+</div>
+
+<div class="col-md-4">
+
+<select
+id="statusFilter"
+class="form-select">
+
+<option value="">
+All Status
+</option>
+
+<option value="Pending">
+Pending
+</option>
+
+<option value="Approved">
+Approved
+</option>
+
+<option value="Rejected">
+Rejected
+</option>
+
+</select>
+
+</div>
+
+<div class="col-md-4">
+
+<select
+id="sortFilter"
+class="form-select">
+
+<option value="desc">
+Newest First
+</option>
+
+<option value="asc">
+Oldest First
+</option>
+
+</select>
+
+</div>
+
+</div>
+
 <div class="table-responsive">
 
-<table class="table align-middle">
+<table
+id="appointmentTable"
+class="table align-middle">
 
 <thead>
 
@@ -962,7 +1047,59 @@ Unavailable
 
 </div>
 
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
 
+<script src="https://cdn.datatables.net/1.13.8/js/jquery.dataTables.min.js"></script>
+
+<script src="https://cdn.datatables.net/1.13.8/js/dataTables.bootstrap5.min.js"></script>
+
+<script>
+
+$(document).ready(function(){
+
+    var table = $('#appointmentTable').DataTable({
+
+        pageLength: 10,
+
+        order: [[0,'desc']],
+
+        lengthMenu:[
+            [10,25,50,100],
+            [10,25,50,100]
+        ]
+
+    });
+
+    $('#appointmentSearch').on('keyup', function(){
+
+        table.search($(this).val()).draw();
+
+    });
+
+    $('#statusFilter').on('change', function(){
+
+        table.column(8)
+             .search($(this).val())
+             .draw();
+
+    });
+
+    $('#sortFilter').on('change', function(){
+
+        if($(this).val() == 'asc')
+        {
+            table.order([0,'asc']).draw();
+        }
+        else
+        {
+            table.order([0,'desc']).draw();
+        }
+
+    });
+
+});
+
+</script>
 
 </body>
 </html>

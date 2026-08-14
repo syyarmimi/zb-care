@@ -10,7 +10,7 @@ $current = basename($_SERVER['PHP_SELF']);
 
 .sidebar{
     width:270px;
-    min-height:100vh;
+    height:100vh;
 
     background:linear-gradient(
         180deg,
@@ -23,8 +23,13 @@ $current = basename($_SERVER['PHP_SELF']);
     box-shadow:
     0 0 30px rgba(0,0,0,.15);
 
-    position:sticky;
+    position:fixed;
     top:0;
+    left:0;
+
+    overflow-y:auto;
+
+    z-index:1000;
 }
 
 .system-logo{
@@ -175,6 +180,7 @@ $current = basename($_SERVER['PHP_SELF']);
 
     background:rgba(239,68,68,.15) !important;
 }
+
 
 </style>
 

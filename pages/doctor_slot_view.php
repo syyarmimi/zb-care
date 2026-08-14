@@ -6,26 +6,35 @@ if(!isset($_SESSION['role']) || $_SESSION['role'] != 'admin'){
     die("Access Denied");
 }
 
-$doctorName = $_GET['doctor'] ?? '';
-$selectedDate = $_GET['date'] ?? '';
+/* =========================
+   GET DOCTOR
+========================= */
 
-/* GET DOCTOR */
+$doctorId = $_GET['doctor'] ?? 0;
+$selectedDate = $_GET['date'] ?? date('Y-m-d');
 
 $stmt = $conn->prepare("
-SELECT ACCOUNT_ID
+SELECT
+    ACCOUNT_ID,
+    USERNAME,
+    DEPARTMENT
 FROM SYARMIMI.HOSPITAL_STAFF
-WHERE USERNAME = :doctor
+WHERE ACCOUNT_ID = :id
 ");
 
 $stmt->execute([
-    ':doctor'=>$doctorName
+    ':id'=>$doctorId
 ]);
 
 $doctor = $stmt->fetch(PDO::FETCH_ASSOC);
 
-$doctorId = $doctor['ACCOUNT_ID'] ?? 0;
+if(!$doctor){
+    die("Doctor not found");
+}
 
-/* GET SLOT */
+/* =========================
+   GET SLOTS
+========================= */
 
 $slotStmt = $conn->prepare("
 SELECT
@@ -38,7 +47,7 @@ LEFT JOIN SYARMIMI.APPOINTMENT A
 ON DS.APPOINTMENT_ID = A.APPOINTMENT_ID
 
 WHERE DS.ACCOUNT_ID = :doctor
-AND DS.SLOT_DATE = TO_DATE(:date,'YYYY-MM-DD')
+AND TRUNC(DS.SLOT_DATE) = TO_DATE(:date,'YYYY-MM-DD')
 
 ORDER BY DS.SLOT_TIME
 ");
@@ -49,6 +58,7 @@ $slotStmt->execute([
 ]);
 
 $slotList = $slotStmt->fetchAll(PDO::FETCH_ASSOC);
+
 ?>
 
 <!DOCTYPE html>
@@ -66,11 +76,17 @@ body{
     font-family:'Segoe UI';
 }
 
-.box{
+.slot-card{
     background:white;
+    border-radius:16px;
     padding:25px;
-    border-radius:15px;
-    box-shadow:0 5px 15px rgba(0,0,0,.05);
+    box-shadow:0 5px 15px rgba(0,0,0,.08);
+}
+
+.slot-title{
+    font-size:32px;
+    font-weight:600;
+    margin-bottom:20px;
 }
 
 .badge{
@@ -83,7 +99,7 @@ body{
 
 <body>
 
-<div class="container mt-4">
+<div class="container-fluid p-4">
 
 <a href="doctor_availability_admin.php"
 class="btn btn-secondary mb-3">
@@ -92,25 +108,79 @@ class="btn btn-secondary mb-3">
 
 </a>
 
-<div class="box">
+<div class="slot-card">
 
-<h3>
-👨‍⚕️ Dr. <?= htmlspecialchars($doctorName) ?>
-</h3>
+<h2 class="slot-title">
+🕒 Doctor Time Slots
+</h2>
 
-<p>
-📅 <?= $selectedDate ?>
+<h5>
+👨‍⚕️ Dr. <?= htmlspecialchars($doctor['USERNAME']) ?>
+</h5>
+
+<p class="text-muted">
+Department: <?= htmlspecialchars($doctor['DEPARTMENT']) ?>
 </p>
 
 <hr>
 
+<div class="row mb-4">
+
+<div class="col-md-4">
+
+<form method="GET">
+
+<input
+type="hidden"
+name="doctor"
+value="<?= $doctorId ?>">
+
+<label class="form-label">
+Select Date
+</label>
+
+<input
+type="date"
+name="date"
+class="form-control"
+value="<?= $selectedDate ?>"
+min="<?= date('Y-m-d') ?>"
+onchange="this.form.submit()">
+
+</form>
+
+</div>
+
+</div>
+
 <table class="table table-bordered align-middle">
 
+<thead>
+
 <tr>
-<th>Time Slot</th>
-<th>Status</th>
-<th>Patient</th>
+
+<th width="35%">
+Slot
+
+</th>
+
+<th width="25%">
+Status
+
+</th>
+
+<th>
+Patient
+
+</th>
+
 </tr>
+
+</thead>
+
+<tbody>
+
+<?php if(count($slotList)>0): ?>
 
 <?php foreach($slotList as $slot): ?>
 
@@ -127,7 +197,7 @@ $end = date(
 strtotime($slot['SLOT_TIME'].' +1 hour')
 );
 
-echo $start . ' - ' . $end;
+echo $start." - ".$end;
 
 ?>
 
@@ -137,21 +207,21 @@ echo $start . ' - ' . $end;
 
 <?php
 
-if($slot['STATUS'] == 'Booked')
+if($slot['STATUS']=='Booked')
 {
-    echo "<span class='badge bg-danger'>🔴 Booked</span>";
+    echo "<span class='badge bg-danger'>Booked</span>";
 }
-elseif($slot['STATUS'] == 'Lunch Break')
+elseif($slot['STATUS']=='Lunch Break')
 {
-    echo "<span class='badge bg-warning text-dark'>🍽 Lunch Break</span>";
+    echo "<span class='badge bg-warning text-dark'>Lunch Break</span>";
 }
-elseif($slot['STATUS'] == 'Unavailable')
+elseif($slot['STATUS']=='Unavailable')
 {
     echo "<span class='badge bg-secondary'>Unavailable</span>";
 }
 else
 {
-    echo "<span class='badge bg-success'>🟢 Available</span>";
+    echo "<span class='badge bg-success'>Available</span>";
 }
 
 ?>
@@ -168,17 +238,27 @@ else
 
 <?php endforeach; ?>
 
-</table>
+<?php else: ?>
 
-<?php if(count($slotList) == 0): ?>
+<tr>
 
-<div class="alert alert-warning">
+<td colspan="3">
 
-No slots found for this doctor/date.
+<div class="alert alert-warning mb-0">
+
+No slots found for this doctor on selected date.
 
 </div>
 
+</td>
+
+</tr>
+
 <?php endif; ?>
+
+</tbody>
+
+</table>
 
 </div>
 

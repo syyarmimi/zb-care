@@ -102,11 +102,24 @@ FROM SYARMIMI.BED
 
 $bedUsage = round(($bed['USED'] / $bed['TOTAL']) * 100);
 
+$patientFlowLabels = [
+'Walk-In',
+'Appointment',
+'Admitted'
+];
+
+$patientFlowValues = [
+$walkin,
+$outpatients,
+$inpatients
+];
+
 /* ================= GENDER ================= */
 
 $genderData = $conn->query("
 SELECT GENDER, COUNT(*) TOTAL
 FROM SYARMIMI.PATIENT
+WHERE GENDER IS NOT NULL
 GROUP BY GENDER
 ")->fetchAll(PDO::FETCH_ASSOC);
 
@@ -120,14 +133,38 @@ foreach($genderData as $g){
 
 }
 
+$admittedToday = getCount($conn,"
+SELECT COUNT(*)
+FROM SYARMIMI.ADMISSION
+WHERE TRUNC(ADMISSION_DATE)=TRUNC(SYSDATE)
+");
+
+$dischargedToday = getCount($conn,"
+SELECT COUNT(*)
+FROM SYARMIMI.ADMISSION
+WHERE TRUNC(DISCHARGE_DATE)=TRUNC(SYSDATE)
+");
+
+$walkinToday = getCount($conn,"
+SELECT COUNT(*)
+FROM SYARMIMI.WALKIN_CONSULTATION
+WHERE TRUNC(CONSULTATION_DATE)=TRUNC(SYSDATE)
+");
+
 /* ================= TREND ================= */
 
 $trend = $conn->query("
-SELECT TO_CHAR(ADMISSION_DATE,'DD') DAY,
+SELECT
+TO_CHAR(ADMISSION_DATE,'DD Mon') DAY,
 COUNT(*) TOTAL
+
 FROM SYARMIMI.ADMISSION
-GROUP BY TO_CHAR(ADMISSION_DATE,'DD')
-ORDER BY DAY
+
+WHERE ADMISSION_DATE >= TRUNC(SYSDATE)-7
+
+GROUP BY TO_CHAR(ADMISSION_DATE,'DD Mon')
+
+ORDER BY MIN(ADMISSION_DATE)
 ")->fetchAll(PDO::FETCH_ASSOC);
 
 $trendLabels = [];
@@ -160,6 +197,35 @@ ON W.WARD_ID = B.WARD_ID
 GROUP BY W.WARD_NAME
 ")->fetchAll(PDO::FETCH_ASSOC);
 
+$topMedication = $conn->query("
+
+SELECT
+m.MEDICATION_NAME,
+COUNT(*) TOTAL
+
+FROM SYARMIMI.MEDICATION_ORDER mo
+
+JOIN SYARMIMI.MEDICATION m
+ON mo.MEDICATION_ID = m.MEDICATION_ID
+
+GROUP BY m.MEDICATION_NAME
+
+ORDER BY TOTAL DESC
+
+FETCH FIRST 5 ROWS ONLY
+
+")->fetchAll(PDO::FETCH_ASSOC);
+
+$medLabels = [];
+$medValues = [];
+
+foreach($topMedication as $m){
+
+    $medLabels[] = $m['MEDICATION_NAME'];
+    $medValues[] = $m['TOTAL'];
+
+}
+
 /* ================= RECENT ================= */
 
 $sql = "
@@ -170,8 +236,19 @@ ON a.PATIENT_ID = p.PATIENT_ID
 ORDER BY a.ADMISSION_ID DESC
 ";
 
+$patientsList = $conn->query("
+SELECT
+PATIENT_ID,
+NAME,
+GENDER
+FROM SYARMIMI.PATIENT
+ORDER BY PATIENT_ID DESC
+FETCH FIRST 6 ROWS ONLY
+")->fetchAll(PDO::FETCH_ASSOC);
+
 $stmt = $conn->prepare($sql);
 $stmt->execute();
+$recentAdmissions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 ?>
 
@@ -182,6 +259,9 @@ $stmt->execute();
 <title>Admin Dashboard</title>
 
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+<link rel="stylesheet"
+href="https://cdn.datatables.net/1.13.8/css/dataTables.bootstrap5.min.css">
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
@@ -278,8 +358,29 @@ body{
     box-shadow:0 5px 15px rgba(0,0,0,0.05);
 }
 
-h1,h2{
-    font-weight:700;
+.sidebar{
+width:260px !important;
+min-width:260px !important;
+max-width:260px !important;
+height:100vh;
+flex-shrink:0;
+}
+
+.chart-container{
+height:220px;
+position:relative;
+}
+
+.chart-container canvas{
+max-height:220px !important;
+}
+
+.chart-box{
+height:auto;
+}
+
+.chart-box canvas{
+max-height:300px !important;
 }
 
 </style>
@@ -713,85 +814,100 @@ Appointments
 
 </div>
 
-<!-- CHART SECTION -->
+<!-- ADMISSION TREND -->
+
+<div class="box mb-4">
+
+    <h6>📊 Admission Trend</h6>
+
+    <div class="chart-container">
+        <canvas id="trendChart"></canvas>
+    </div>
+
+</div>
+
+<!-- 3 CHART SEBARIS -->
+
+<div class="row mb-4">
+
+    <!-- Gender -->
+
+    <div class="col-md-4">
+
+        <div class="box">
+
+            <h6>👤 Gender Distribution</h6>
+
+            <div class="chart-container">
+                <canvas id="genderChart"></canvas>
+            </div>
+
+        </div>
+
+    </div>
+
+    <!-- Patient Flow -->
+
+    <div class="col-md-4">
+
+        <div class="box">
+
+            <h6>🚶 Patient Flow</h6>
+
+            <div class="chart-container">
+                <canvas id="flowChart"></canvas>
+            </div>
+
+        </div>
+
+    </div>
+
+    <!-- Medication -->
+
+    <div class="col-md-4">
+
+        <div class="box">
+
+            <h6>💊 Top 5 Medications</h6>
+
+            <div class="chart-container">
+                <canvas id="medChart"></canvas>
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+<div class="box mt-4">
+
+<div class="d-flex justify-content-between mb-4">
+
+<h3>
+🏥 Recent Admissions
+</h3>
+
+<a href="admission.php" class="btn btn-primary">
+Latest 5 Admissions
+</a>
+
+</div>
 
 <div class="row">
 
-<div class="col-md-8">
+<?php foreach(array_slice($recentAdmissions,0,5) as $row): ?>
 
-<div class="box">
+<div class="col-md-6 mb-3">
 
-<h6>
-📊 Admission Trend
-</h6>
+<div class="card shadow-sm">
 
-<canvas id="trendChart"></canvas>
+<div class="card-body">
 
-</div>
+<h5><?= $row['NAME'] ?></h5>
 
-<div class="box mt-4">
-
-<h6>
-🧾 Recent Admissions
-</h6>
-
-<table class="table">
-
-<tr>
-<th>ID</th>
-<th>Patient</th>
-</tr>
-
-<?php
-
-$c=0;
-
-while($row=$stmt->fetch(PDO::FETCH_ASSOC)){
-
-if($c++==5) break;
-
-?>
-
-<tr>
-
-<td><?= $row['ADMISSION_ID'] ?></td>
-
-<td><?= $row['NAME'] ?></td>
-
-</tr>
-
-<?php } ?>
-
-</table>
-
-</div>
-
-</div>
-
-<div class="col-md-4">
-
-<div class="box">
-
-<h6>
-👤 Gender Distribution
-</h6>
-
-<canvas id="genderChart"></canvas>
-
-</div>
-
-<div class="box mt-4">
-
-<h6>
-🏥 Bed Usage
-</h6>
-
-<h1 class="text-center mt-4">
-<?= $bedUsage ?>%
-</h1>
-
-<p class="text-center text-muted">
-Current Occupancy
+<p class="text-muted">
+Admission #<?= $row['ADMISSION_ID'] ?>
 </p>
 
 </div>
@@ -799,6 +915,73 @@ Current Occupancy
 </div>
 
 </div>
+
+<?php endforeach; ?>
+
+</div>
+
+</div>
+
+<div class="box mt-4">
+
+<div class="d-flex justify-content-between mb-4">
+
+<h3>
+👤 Patient Records
+</h3>
+
+<a href="patient.php" class="btn btn-primary">
+View All Patients
+</a>
+
+</div>
+
+<div class="row">
+
+<?php foreach($patientsList as $p): ?>
+
+<div class="col-md-4 mb-4">
+
+<div class="card shadow-sm text-center">
+
+<div class="card-body">
+
+<div style="
+width:80px;
+height:80px;
+background:#dbeafe;
+border-radius:50%;
+margin:auto;
+display:flex;
+align-items:center;
+justify-content:center;
+font-size:35px;
+">
+
+👤
+
+</div>
+
+<h5 class="mt-3">
+<?= $p['NAME'] ?>
+</h5>
+
+<span class="badge bg-secondary">
+<?= $p['GENDER'] ?>
+</span>
+
+<hr>
+
+Patient ID:
+<b>#<?= $p['PATIENT_ID'] ?></b>
+
+</div>
+
+</div>
+
+</div>
+
+<?php endforeach; ?>
 
 </div>
 
@@ -886,6 +1069,67 @@ labels: <?= json_encode($genderLabels) ?>,
 datasets:[{
 data: <?= json_encode($genderValues) ?>
 }]
+},
+
+options:{
+responsive:true,
+maintainAspectRatio:false,
+
+plugins:{
+legend:{
+position:'bottom'
+}
+}
+}
+
+});
+
+new Chart(document.getElementById('flowChart'),{
+
+type:'pie',
+
+data:{
+labels: <?= json_encode($patientFlowLabels) ?>,
+
+datasets:[{
+data: <?= json_encode($patientFlowValues) ?>
+}]
+},
+
+options:{
+responsive:true,
+maintainAspectRatio:false,
+
+plugins:{
+legend:{
+position:'bottom'
+}
+}
+}
+
+});
+
+new Chart(document.getElementById('medChart'),{
+
+type:'doughnut',
+
+data:{
+labels: <?= json_encode($medLabels) ?>,
+
+datasets:[{
+data: <?= json_encode($medValues) ?>
+}]
+},
+
+options:{
+responsive:true,
+maintainAspectRatio:false,
+
+plugins:{
+legend:{
+position:'bottom'
+}
+}
 }
 
 });
@@ -958,5 +1202,6 @@ echo "
 </div>
 
 </div>
+
 </body>
 </html>

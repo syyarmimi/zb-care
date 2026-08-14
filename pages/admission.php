@@ -277,6 +277,8 @@ $sort = $_GET['sort'] ?? 'DESC';
 <title>Admission Workflow</title>
 
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+<link rel="stylesheet"
+href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css">
 
 <style>
 
@@ -292,6 +294,14 @@ body{
     border-radius:15px;
     box-shadow:0px 4px 10px rgba(0,0,0,0.08);
     margin-top:20px;
+}
+
+.sidebar{
+width:260px !important;
+min-width:260px !important;
+max-width:260px !important;
+height:100vh;
+flex-shrink:0;
 }
 
 </style>
@@ -545,58 +555,99 @@ Add
 </div>
 
 <!-- FILTER -->
-<div class="table-box">
-
-<form method="GET">
-
-<div class="row mb-3">
-
-<div class="col-md-6">
-<input type="text"
-name="search"
-class="form-control"
-placeholder="Search Patient Name / IC"
-value="<?= $search ?>">
-</div>
-<div class="col-md-5"><div class="col-md-3">
-<select name="sort"
-class="form-control">
-
-<option value="DESC">Latest First</option>
-<option value="ASC">Oldest First</option>
-
-</select>
-</div>
-
-<div class="col-md-3">
-<button class="btn btn-dark w-100">
-Search
-</button>
-</div>
-
-</div>
-
-</form>
+<div class="table-box" id="inpatientBox">
 
 </div>
 
 <!-- INPATIENT -->
 <div class="table-box">
 
-<h4>🛏️ Current Inpatients</h4>
+<div class="row mb-3">
 
-<table class="table table-bordered table-hover">
+<div class="col-md-4">
+
+<div class="input-group">
+
+<span class="input-group-text">
+🔍
+</span>
+
+<input
+type="text"
+id="globalSearch"
+class="form-control"
+placeholder="Search patient">
+
+</div>
+
+</div>
+
+<div class="col-md-4">
+
+<select
+id="typeFilter"
+class="form-select">
+
+<option value="">
+All Types
+</option>
+
+<option value="Inpatient">
+Inpatient
+</option>
+
+<option value="Appointment">
+Appointment
+</option>
+
+<option value="Walk-In">
+Walk-In
+</option>
+
+</select>
+
+</div>
+
+<div class="col-md-4">
+
+<select
+id="sortFilter"
+class="form-select">
+
+
+<option value="latest">
+Newest First
+</option>
+
+<option value="oldest">
+Oldest First
+</option>
+
+</select>
+
+</div>
+
+</div>
+
+<h4>🛏️ List Of Inpatients and Outpatients</h4>
+
+<table
+id="patientTable"
+class="table table-bordered table-hover">
 
 <thead class="table-dark">
 
 <tr>
+
 <th>ID</th>
 <th>Patient</th>
+<th>Type</th>
 <th>Doctor</th>
-<th>Ward</th>
-<th>Diagnosis</th>
-<th>Admission</th>
+<th>Ward / Department</th>
+<th>Date</th>
+<th>Status</th>
 <th>Action</th>
+
 </tr>
 
 </thead>
@@ -606,14 +657,16 @@ Search
 <?php
 
 $sql = "
+
 SELECT
-A.ADMISSION_ID,
+A.ADMISSION_ID AS ID,
 P.NAME AS PATIENT_NAME,
 P.IC_NUMBER,
+'Inpatient' AS TYPE,
 S.USERNAME AS DOCTOR_NAME,
-W.WARD_NAME,
-D.DIAGNOSIS_DETAILS,
-A.ADMISSION_DATE
+W.WARD_NAME AS LOCATION,
+A.ADMISSION_DATE AS RECORD_DATE,
+'Admitted' AS STATUS
 
 FROM SYARMIMI.ADMISSION A
 
@@ -629,16 +682,8 @@ ON B.WARD_ID = W.WARD_ID
 LEFT JOIN SYARMIMI.HOSPITAL_STAFF S
 ON A.ACCOUNT_ID = S.ACCOUNT_ID
 
-LEFT JOIN SYARMIMI.DIAGNOSIS D
-ON A.ADMISSION_ID = D.ADMISSION_ID
-
 WHERE A.DISCHARGE_DATE IS NULL
-AND (
-LOWER(P.NAME) LIKE LOWER('%$search%')
-OR P.IC_NUMBER LIKE '%$search%'
-)
 
-ORDER BY A.ADMISSION_ID $sort
 ";
 
 $stmt = $conn->query($sql);
@@ -649,7 +694,7 @@ while($row = $stmt->fetch(PDO::FETCH_ASSOC)){
 
 <tr>
 
-<td><?= $row['ADMISSION_ID'] ?></td>
+<td><?= $row['ID'] ?></td>
 
 <td>
 <?= $row['PATIENT_NAME'] ?><br>
@@ -657,21 +702,33 @@ while($row = $stmt->fetch(PDO::FETCH_ASSOC)){
 </td>
 
 <td>
+<span class="badge bg-primary">
+Inpatient
+</span>
+</td>
+
+<td>
 Dr. <?= $row['DOCTOR_NAME'] ?>
 </td>
 
-<td><?= $row['WARD_NAME'] ?></td>
+<td><?= $row['LOCATION'] ?></td>
 
-<td><?= $row['DIAGNOSIS_DETAILS'] ?? '-' ?></td>
+<td><?= $row['RECORD_DATE'] ?></td>
 
-<td><?= $row['ADMISSION_DATE'] ?></td>
+<td>
+<span class="badge bg-success">
+Admitted
+</span>
+</td>
 
 <td>
 
-<a href="?discharge=<?= $row['ADMISSION_ID'] ?>"
-class="btn btn-danger btn-sm"
-onclick="return confirm('Discharge patient?')">
+<a
+href="?discharge=<?= $row['ID'] ?>"
+class="btn btn-danger btn-sm">
+
 Discharge
+
 </a>
 
 </td>
@@ -680,42 +737,22 @@ Discharge
 
 <?php } ?>
 
-</tbody>
-
-</table>
-
-</div>
-
-<!-- OUTPATIENT -->
-<div class="table-box">
-
-<h4>🩺 Outpatient / Appointment Records</h4>
-
-<table class="table table-bordered table-hover">
-
-<thead class="table-dark">
-
-<tr>
-<th>ID</th>
-<th>Patient</th>
-<th>Department</th>
-<th>Doctor</th>
-<th>Date</th>
-<th>Status</th>
-</tr>
-
-</thead>
-
-<tbody>
-
 <?php
 
 $sql = "
-SELECT *
+
+SELECT
+APPOINTMENT_ID AS ID,
+PATIENT_NAME,
+IC_NUMBER,
+'Appointment' AS TYPE,
+DOCTOR_NAME,
+DEPARTMENT AS LOCATION,
+APPOINTMENT_DATE AS RECORD_DATE,
+STATUS
+
 FROM SYARMIMI.APPOINTMENT
-WHERE LOWER(PATIENT_NAME) LIKE LOWER('%$search%')
-OR IC_NUMBER LIKE '%$search%'
-ORDER BY APPOINTMENT_ID $sort
+
 ";
 
 $stmt = $conn->query($sql);
@@ -726,41 +763,137 @@ while($row = $stmt->fetch(PDO::FETCH_ASSOC)){
 
 <tr>
 
-<td><?= $row['APPOINTMENT_ID'] ?></td>
+<td><?= $row['ID'] ?></td>
 
 <td>
 <?= $row['PATIENT_NAME'] ?><br>
 <small><?= $row['IC_NUMBER'] ?></small>
 </td>
 
-<td><?= $row['DEPARTMENT'] ?></td>
+<td>
+<span class="badge bg-warning">
+Appointment
+</span>
+</td>
 
-<td><?= $row['DOCTOR_NAME'] ?></td>
+<td>
+<?= $row['DOCTOR_NAME'] ?>
+</td>
 
-<td><?= $row['APPOINTMENT_DATE'] ?></td>
+<td><?= $row['LOCATION'] ?></td>
+
+<td><?= $row['RECORD_DATE'] ?></td>
 
 <td>
 
 <?php
 
-$status = $row['STATUS'];
+if($row['STATUS']=='Approved'){
 
-if($status == 'Pending'){
+echo "<span class='badge bg-success'>Approved</span>";
 
-    echo "<span class='badge bg-warning'>Pending</span>";
+}
+elseif($row['STATUS']=='Pending'){
 
-}elseif($status == 'Approved'){
+echo "<span class='badge bg-warning'>Pending</span>";
 
-    echo "<span class='badge bg-success'>Approved</span>";
+}
+else{
 
-}else{
+echo "<span class='badge bg-danger'>Rejected</span>";
 
-    echo "<span class='badge bg-danger'>Rejected</span>";
 }
 
 ?>
 
 </td>
+
+<td>-</td>
+
+</tr>
+
+
+
+<?php } ?>
+
+<?php
+
+$sql = "
+
+SELECT
+W.CONSULTATION_ID AS ID,
+P.NAME AS PATIENT_NAME,
+P.IC_NUMBER,
+'Walk-In' AS TYPE,
+S.USERNAME AS DOCTOR_NAME,
+W.DEPARTMENT AS LOCATION,
+W.CONSULTATION_DATE AS RECORD_DATE,
+W.STATUS
+
+FROM SYARMIMI.WALKIN_CONSULTATION W
+
+LEFT JOIN SYARMIMI.PATIENT P
+ON W.PATIENT_ID = P.PATIENT_ID
+
+LEFT JOIN SYARMIMI.HOSPITAL_STAFF S
+ON W.ACCOUNT_ID = S.ACCOUNT_ID
+
+";
+
+$stmt = $conn->query($sql);
+
+while($row = $stmt->fetch(PDO::FETCH_ASSOC)){
+
+?>
+
+<tr>
+
+<td><?= $row['ID'] ?></td>
+
+<td>
+<?= $row['PATIENT_NAME'] ?><br>
+<small><?= $row['IC_NUMBER'] ?></small>
+</td>
+
+<td>
+<span class="badge bg-info">
+Walk-In
+</span>
+</td>
+
+<td>
+Dr. <?= $row['DOCTOR_NAME'] ?>
+</td>
+
+<td><?= $row['LOCATION'] ?></td>
+
+<td><?= $row['RECORD_DATE'] ?></td>
+
+<td>
+
+<?php
+
+if($row['STATUS']=='Completed'){
+
+echo "<span class='badge bg-success'>Completed</span>";
+
+}
+elseif($row['STATUS']=='Pending'){
+
+echo "<span class='badge bg-warning'>Pending</span>";
+
+}
+else{
+
+echo "<span class='badge bg-secondary'>{$row['STATUS']}</span>";
+
+}
+
+?>
+
+</td>
+
+<td>-</td>
 
 </tr>
 
@@ -775,6 +908,75 @@ if($status == 'Pending'){
 </div>
 
 </div>
+
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+
+<script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+
+<script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"></script>
+
+<script>
+
+$(document).ready(function(){
+
+let patientTable = $('#patientTable').DataTable({
+
+searching:true,
+info:true,
+pageLength:10,
+
+order:[[0,'desc']],
+
+lengthMenu:[
+[10,25,50,100],
+[10,25,50,100]
+],
+
+dom:'frtip'
+
+});
+
+$('#globalSearch').on('keyup', function(){
+
+patientTable.search($(this).val()).draw();
+
+});
+
+$('#typeFilter').on('change', function(){
+
+let type = $(this).val();
+
+if(type == ''){
+
+patientTable.column(2).search('').draw();
+
+}else{
+
+patientTable.column(2)
+.search(type, true, false)
+.draw();
+
+}
+
+});
+
+$('#sortFilter').on('change', function(){
+
+if($(this).val() == 'latest'){
+
+patientTable.order([0,'desc']).draw();
+
+}else{
+
+patientTable.order([0,'asc']).draw();
+
+}
+
+});
+
+});
+
+</script>
 
 </body>
 </html>

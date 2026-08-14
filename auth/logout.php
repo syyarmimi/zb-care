@@ -2,7 +2,7 @@
 session_start();
 session_destroy();
 
-// ✅ go back to root index.php
-header("Location: ../index.php");
+// ✅ Redirect to staff_portal.php
+header("Location: ../pages/staff_portal.php");
 exit();
 ?>

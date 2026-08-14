@@ -154,16 +154,34 @@ body {
     padding:25px;
     box-shadow:0 10px 25px rgba(0,0,0,.08);
 }
+
+.sidebar .nav-link{
+color:#dbeafe;
+padding:12px 18px;
+margin:4px 12px;
+border-radius:14px;
+display:flex;
+align-items:center;
+gap:10px;
+font-weight:500;
+transition:.25s;
+}
+
+.main-content{
+    margin-left:270px;
+}
+
+
 </style>
 </head>
 
 <body>
 
-<div class="d-flex">
+<div>
 
 <?php include("../includes/sidebar_nurse.php"); ?>
 
-<div class="flex-grow-1 p-4">
+<div class="main-content p-4">
 
 <h3 class="mb-4">🩺 Nurse Dashboard</h3>
 
@@ -349,7 +367,7 @@ class="btn btn-success">
 
 </a>
 
-<a href="nurse_patients.php"
+<a href="patient_record_details.php"
 class="btn btn-primary">
 
 👤 Patient Records
@@ -434,7 +452,7 @@ New
 👤 Patient Records
 </h4>
 
-<a href="nurse_patients.php"
+<a href="patient_list.php"
 class="btn btn-primary">
 
 View All Patients
@@ -554,13 +572,12 @@ Admission ID:
 
 </p>
 
-<a href="nurse_patients.php"
+<a href="patient_record_details.php?admission_id=<?= $p['ADMISSION_ID'] ?>"
 class="btn btn-outline-primary w-100">
 
-View Details
+Open Patient Record
 
 </a>
-
 </div>
 
 </div>

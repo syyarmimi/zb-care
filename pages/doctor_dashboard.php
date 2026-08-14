@@ -145,17 +145,31 @@ $patients = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 $appStmt = $conn->prepare("
 
-SELECT *
-FROM SYARMIMI.APPOINTMENT
-WHERE LOWER(DOCTOR_NAME) LIKE LOWER(:doctor_name)
-AND STATUS='Approved'
-AND TO_DATE(APPOINTMENT_DATE,'YYYY-MM-DD') >= TRUNC(SYSDATE)
-ORDER BY TO_DATE(APPOINTMENT_DATE,'YYYY-MM-DD')
+SELECT
+    A.APPOINTMENT_ID,
+    A.PATIENT_NAME,
+    DS.SLOT_DATE,
+    DS.SLOT_TIME
+
+FROM SYARMIMI.DOCTOR_SLOT DS
+
+JOIN SYARMIMI.APPOINTMENT A
+ON DS.APPOINTMENT_ID = A.APPOINTMENT_ID
+
+WHERE DS.ACCOUNT_ID = :doctor
+
+AND DS.STATUS = 'Booked'
+
+AND DS.SLOT_DATE >= TRUNC(SYSDATE)
+
+ORDER BY
+DS.SLOT_DATE,
+DS.SLOT_TIME
 
 ");
 
 $appStmt->execute([
-    ':doctor_name'=>'%'.$doctor_name.'%'
+    ':doctor'=>$doctor_id
 ]);
 
 $appointments = $appStmt->fetchAll(PDO::FETCH_ASSOC);
@@ -165,22 +179,40 @@ $totalAppointmentPatients = count($appointments);
 /* ================= TODAY APPOINTMENTS ================= */
 
 $todayAppointments = $conn->prepare("
+
 SELECT
     PATIENT_NAME,
-    APPOINTMENT_TIME
+    APPOINTMENT_TIME,
+    APPOINTMENT_ID,
+    'Appointment' AS TYPE
+
 FROM SYARMIMI.APPOINTMENT
+
 WHERE ACCOUNT_ID = :doctor1
+AND STATUS='Approved'
+
+AND TRUNC(
+    TO_DATE(APPOINTMENT_DATE,'YYYY-MM-DD')
+) = TRUNC(SYSDATE)
 
 UNION ALL
 
 SELECT
     P.NAME,
+    'Walk-In',
+    W.CONSULTATION_ID,
     'Walk-In'
+
 FROM SYARMIMI.WALKIN_CONSULTATION W
+
 JOIN SYARMIMI.PATIENT P
 ON W.PATIENT_ID = P.PATIENT_ID
+
 WHERE W.ACCOUNT_ID = :doctor2
 AND UPPER(W.STATUS)='ASSIGNED'
+
+ORDER BY 2
+
 ");
 
 $todayAppointments->execute([
@@ -552,7 +584,6 @@ Patient Activity
 
 <!-- APPOINTMENT STATISTICS -->
 
-<!-- APPOINTMENT STATISTICS -->
 
 <div class="col-md">
 
@@ -630,33 +661,79 @@ Medication Orders
 <div class="card-box mt-4">
 
 <h5 class="mb-3">
-📅 Today's Appointments
+📅 Today's Appointments & Walk-In Patients
 </h5>
 
 <?php if(count($todayList) > 0): ?>
 
     <table class="table table-sm">
 
-        <tr>
-            <th>Time</th>
-            <th>Patient</th>
-        </tr>
+      <tr>
+<th>Type</th>
+<th>Time</th>
+<th>Patient</th>
+<th>Action</th>
+</tr>
 
-        <?php foreach($todayList as $t): ?>
+      <?php foreach($todayList as $t): ?>
 
-        <tr>
+<tr>
 
-            <td>
-                <?= $t['APPOINTMENT_TIME'] ?>
-            </td>
+<td>
 
-            <td>
-                <?= $t['PATIENT_NAME'] ?>
-            </td>
+<?php if($t['TYPE']=='Walk-In'): ?>
 
-        </tr>
+<span class="badge bg-warning text-dark">
+Walk-In
+</span>
 
-        <?php endforeach; ?>
+<?php else: ?>
+
+<span class="badge bg-primary">
+Appointment
+</span>
+
+<?php endif; ?>
+
+</td>
+
+<td>
+<?= $t['APPOINTMENT_TIME'] ?>
+</td>
+
+<td>
+<?= $t['PATIENT_NAME'] ?>
+</td>
+
+<td>
+
+<?php if($t['TYPE']=='Walk-In'): ?>
+
+<a
+href="treatment.php?type=walkin&id=<?= $t['APPOINTMENT_ID'] ?>"
+class="btn btn-warning btn-sm">
+
+Diagnose
+
+</a>
+
+<?php else: ?>
+
+<a
+href="treatment.php?id=<?= $t['APPOINTMENT_ID'] ?>&type=appointment"
+class="btn btn-primary btn-sm">
+
+Diagnose
+
+</a>
+
+<?php endif; ?>
+
+</td>
+
+</tr>
+
+<?php endforeach; ?>
 
     </table>
 
@@ -667,57 +744,6 @@ Medication Orders
         No appointments scheduled today.
 
     </div>
-
-<?php endif; ?>
-
-</div>
-
-<div class="card-box mt-4">
-
-<h5 class="mb-4">
-🚶 Walk-In Patients Waiting
-</h5>
-
-<?php if(count($walkinPatients) > 0): ?>
-
-<table class="table table-bordered">
-
-<tr>
-<th>Patient</th>
-<th>Action</th>
-</tr>
-
-<?php foreach($walkinPatients as $w): ?>
-
-<tr>
-
-<td>
-<?= $w['NAME'] ?>
-</td>
-
-<td>
-
-<a
-href="treatment.php?type=walkin&id=<?= $w['CONSULTATION_ID'] ?>"
-class="btn btn-warning btn-sm">
-
-Diagnose
-
-</a>
-
-</td>
-
-</tr>
-
-<?php endforeach; ?>
-
-</table>
-
-<?php else: ?>
-
-<div class="alert alert-success">
-No walk-in patients waiting.
-</div>
 
 <?php endif; ?>
 
@@ -836,17 +862,15 @@ Diagnose
 <tr>
 
 <td>
-
 <b><?= $a['PATIENT_NAME'] ?></b>
-
 </td>
 
 <td>
-<?= $a['APPOINTMENT_DATE'] ?>
+<?= date('d M Y', strtotime($a['SLOT_DATE'])) ?>
 </td>
 
 <td>
-<?= $a['APPOINTMENT_TIME'] ?>
+<?= $a['SLOT_TIME'] ?>
 </td>
 
 <td>

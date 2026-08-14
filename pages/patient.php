@@ -93,10 +93,55 @@ if(isset($_POST['add'])){
 <head>
 <title>Patient Management</title>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.datatables.net/1.13.8/css/dataTables.bootstrap5.min.css">
+<!-- Add jQuery and DataTables JS -->
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.8/js/jquery.dataTables.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.8/js/dataTables.bootstrap5.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 
 <style>
-.card { border-radius: 12px; }
-.btn { border-radius: 8px; }
+body{
+    background:#eef2f7;
+}
+
+.card{
+    border:none;
+    border-radius:18px;
+    box-shadow:0 4px 15px rgba(0,0,0,.05);
+}
+
+.filter-box{
+    background:#fff;
+    padding:18px;
+    border-radius:18px;
+    box-shadow:0 4px 15px rgba(0,0,0,.05);
+}
+
+.dataTables_filter{
+    display:none;
+}
+
+.dataTables_info{
+    margin-top:15px;
+}
+
+.dataTables_paginate{
+    margin-top:15px;
+}
+
+.table thead{
+    background:#0f172a;
+    color:white;
+}
+
+.table th{
+    border:none;
+}
+
+.table td{
+    vertical-align:middle;
+}
 </style>
 
 </head>
@@ -171,16 +216,67 @@ value="<?= $editData['ADDRESS'] ?? '' ?>" placeholder="Address" required>
 
 <h5>📋 Patient List</h5>
 
-<!-- SORT DROPDOWN -->
-<form method="GET" class="mb-3">
-<select name="sort" class="form-control w-25" onchange="this.form.submit()">
-    <option disabled <?= !isset($_GET['sort']) ? 'selected' : '' ?>>Sort Order</option>
-    <option value="asc" <?= ($sort=='asc')?'selected':'' ?>>Ascending (Oldest First)</option>
-    <option value="desc" <?= ($sort=='desc')?'selected':'' ?>>Descending (Newest First)</option>
-</select>
-</form>
+<div class="filter-box mb-4">
 
-<table class="table table-hover table-bordered">
+<div class="row g-3">
+
+<div class="col-md-4">
+
+<input
+type="text"
+id="patientSearch"
+class="form-control"
+placeholder="🔍 Search patient">
+
+</div>
+
+<div class="col-md-4">
+
+<select
+id="genderFilter"
+class="form-select">
+
+<option value="">
+All Gender
+</option>
+
+<option value="Male">
+Male
+</option>
+
+<option value="Female">
+Female
+</option>
+
+</select>
+
+</div>
+
+<div class="col-md-4">
+
+<select
+id="sortFilter"
+class="form-select">
+
+<option value="desc">
+Newest First
+</option>
+
+<option value="asc">
+Oldest First
+</option>
+
+</select>
+
+</div>
+
+</div>
+
+</div>
+
+<table
+id="patientTable"
+class="table table-hover">
 
 <thead class="table-dark">
 <tr>
@@ -230,6 +326,54 @@ while($row = $stmt->fetch(PDO::FETCH_ASSOC)){
 
 </div>
 </div>
+
+<script>
+$(document).ready(function(){
+
+    var table = $('#patientTable').DataTable({
+
+        pageLength:10,
+
+        order:[[0,'desc']],
+
+        lengthMenu:[
+            [10,25,50,100],
+            [10,25,50,100]
+        ]
+
+    });
+
+    $('#patientSearch').on('keyup', function(){
+
+        table.search(this.value).draw();
+
+    });
+
+    $('#genderFilter').on('change', function(){
+
+        // Gender is now column index 4 (0-indexed)
+        table.column(4)
+             .search(this.value)
+             .draw();
+
+    });
+
+    $('#sortFilter').on('change', function(){
+
+        if(this.value == 'asc')
+        {
+            table.order([0,'asc']).draw();
+        }
+        else
+        {
+            table.order([0,'desc']).draw();
+        }
+
+    });
+
+});
+
+</script>
 
 </body>
 </html>

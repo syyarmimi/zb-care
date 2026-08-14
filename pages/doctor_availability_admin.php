@@ -63,6 +63,9 @@ ORDER BY H.USERNAME
 <title>Doctor Availability</title>
 
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+<link rel="stylesheet"
+href="https://cdn.datatables.net/1.13.8/css/dataTables.bootstrap5.min.css">
 
 <style>
 
@@ -134,6 +137,37 @@ body{
 .unavailable{
     color:#dc2626;
     font-weight:700;
+}
+
+.sidebar{
+width:260px !important;
+min-width:260px !important;
+max-width:260px !important;
+height:100vh;
+flex-shrink:0;
+}
+
+.dataTables_filter{
+    display:none;
+}
+
+.dataTables_info{
+    margin-top:15px;
+}
+
+.dataTables_paginate{
+    margin-top:15px;
+}
+
+.dataTables_wrapper .dataTables_paginate .paginate_button.current{
+    background:#2563eb !important;
+    color:white !important;
+    border:none !important;
+}
+
+.dataTables_wrapper .dataTables_paginate .paginate_button:hover{
+    background:#2563eb !important;
+    color:white !important;
 }
 
 </style>
@@ -363,7 +397,7 @@ Search
 
 <table
 id="availabilityTable"
-class="table table-hover align-middle">
+class="table table-hover table-bordered align-middle">
 
 <thead>
 
@@ -533,106 +567,46 @@ View Schedule
 
 <script>
 
-document.getElementById('doctorSearch')
-.addEventListener('keyup', function(){
+<script>
 
-let search =
-this.value.toLowerCase();
+$(document).ready(function(){
 
-let rows =
-document.querySelectorAll(
-'#availabilityTable tbody tr'
-);
+    var table = $('#availabilityTable').DataTable();
 
-rows.forEach(function(row){
+    $('#doctorSearch').on('keyup', function(){
 
-let doctor =
-row.cells[0].innerText.toLowerCase();
+        table.search(this.value).draw();
 
-row.style.display =
-doctor.includes(search)
-? ''
-: 'none';
-
-});
+    });
 
 });
 
 </script>
 
-<script>
-
-document.getElementById('sortDoctor')
-.addEventListener('change', function(){
-
-let table =
-document.getElementById('availabilityTable');
-
-let tbody =
-table.querySelector('tbody');
-
-let rows =
-Array.from(tbody.querySelectorAll('tr'));
-
-rows.sort((a,b)=>{
-
-let doctorA =
-a.cells[0].innerText.toLowerCase();
-
-let doctorB =
-b.cells[0].innerText.toLowerCase();
-
-if(this.value === 'az')
-{
-    return doctorA.localeCompare(doctorB);
-}
-else
-{
-    return doctorB.localeCompare(doctorA);
-}
-
-});
-
-rows.forEach(row=>tbody.appendChild(row));
-
-});
-
 </script>
 
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+
+<script src="https://cdn.datatables.net/1.13.8/js/jquery.dataTables.min.js"></script>
+
+<script src="https://cdn.datatables.net/1.13.8/js/dataTables.bootstrap5.min.js"></script>
+
 <script>
 
-document.getElementById('sortDate')
-.addEventListener('change', function(){
+$(document).ready(function(){
 
-let table =
-document.getElementById('availabilityTable');
+    var table = $('#availabilityTable').DataTable({
 
-let tbody =
-table.querySelector('tbody');
+        pageLength: 10,
 
-let rows =
-Array.from(tbody.querySelectorAll('tr'));
+        order: [[0,'asc']],
 
-rows.sort((a,b)=>{
+        lengthMenu: [
+            [10,25,50,100],
+            [10,25,50,100]
+        ]
 
-let dateA =
-new Date(a.cells[1].innerText);
-
-let dateB =
-new Date(b.cells[1].innerText);
-
-if(this.value === 'latest')
-{
-    return dateB - dateA;
-}
-else
-{
-    return dateA - dateB;
-}
-
-});
-
-rows.forEach(row=>tbody.appendChild(row));
+    });
 
 });
 

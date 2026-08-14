@@ -39,6 +39,12 @@ if(isset($_POST['book'])){
     $department       = $_POST['department'];
     $doctorAccountId = $_POST['doctor'];
     $appointment_date = $_POST['appointment_date'];
+    if(strtotime($appointment_date) < strtotime(date('Y-m-d'))){
+
+$message =
+"Appointment date cannot be earlier than today.";
+
+}else{
     $appointment_time = $_POST['appointment_time'];
     $address          = $_POST['address'];
     $notes            = $_POST['notes'];
@@ -109,12 +115,16 @@ $stmt->execute([
 ]);
         $message = "Appointment submitted successfully!";
 
-    }catch(PDOException $e){
+  }catch(PDOException $e){
 
-        $message = "Error: " . $e->getMessage();
+$message = "Error: " . $e->getMessage();
 
-    }
 }
+
+} // tutup else
+
+} // tutup if(isset($_POST['book']))
+
 ?>
 
 <!DOCTYPE html>
@@ -278,6 +288,14 @@ footer{
     margin-top:80px;
 }
 
+.navbar-brand{
+    font-size:30px;
+    font-weight:800;
+    color:#0d6efd !important;
+    cursor:pointer;
+    text-decoration:none;
+}
+
 </style>
 
 </head>
@@ -292,8 +310,11 @@ footer{
 
 <div class="container">
 
-<a class="navbar-brand">
+<a href="../index.php"
+class="navbar-brand text-decoration-none">
+
 🏥 ZB-CARE
+
 </a>
 
 <div class="ms-auto">
@@ -338,7 +359,9 @@ Book your specialist consultation online easily.
 
 <?php if($message != ""): ?>
 
-<div class="alert alert-success">
+<div class="alert <?= strpos($message,'Error') !== false || strpos($message,'cannot') !== false
+? 'alert-danger'
+: 'alert-success' ?>">
 
 <?= $message ?>
 
@@ -355,9 +378,12 @@ Book your specialist consultation online easily.
 
 <label>Patient Name *</label>
 
-<input type="text"
+<input
+type="text"
 name="patient_name"
 class="form-control"
+style="text-transform:uppercase"
+oninput="this.value=this.value.toUpperCase()"
 required>
 
 </div>
@@ -367,9 +393,12 @@ required>
 
 <label>Contact Number *</label>
 
-<input type="text"
+<input
+type="text"
+id="phone"
 name="phone"
 class="form-control"
+maxlength="12"
 required>
 
 </div>
@@ -391,9 +420,12 @@ required>
 
 <label>IC Number *</label>
 
-<input type="text"
+<input
+type="text"
+id="ic_number"
 name="ic_number"
 class="form-control"
+maxlength="14"
 required>
 
 </div>
@@ -481,7 +513,9 @@ required>
 
 <label>Appointment Date *</label>
 
-<input type="date"
+<input
+type="date"
+id="appointment_date"
 name="appointment_date"
 class="form-control"
 required>
@@ -493,10 +527,25 @@ required>
 
 <label>Appointment Time *</label>
 
-<input type="time"
+<select
 name="appointment_time"
-class="form-control"
+class="form-select"
 required>
+
+<option value="">
+Select Appointment Time
+</option>
+
+<option value="08:00 AM">08:00 AM</option>
+<option value="09:00 AM">09:00 AM</option>
+<option value="10:00 AM">10:00 AM</option>
+<option value="11:00 AM">11:00 AM</option>
+<option value="12:00 PM">12:00 PM</option>
+<option value="02:00 PM">02:00 PM</option>
+<option value="03:00 PM">03:00 PM</option>
+<option value="04:00 PM">04:00 PM</option>
+
+</select>
 
 </div>
 
@@ -505,9 +554,12 @@ required>
 
 <label>Address *</label>
 
-<textarea name="address"
+<textarea
+name="address"
 rows="3"
 class="form-control"
+style="text-transform:uppercase"
+oninput="this.value=this.value.toUpperCase()"
 required></textarea>
 
 </div>
@@ -517,9 +569,12 @@ required></textarea>
 
 <label>Remarks / Symptoms</label>
 
-<textarea name="notes"
+<textarea
+name="notes"
 rows="5"
 class="form-control"
+style="text-transform:uppercase"
+oninput="this.value=this.value.toUpperCase()"
 placeholder="Describe symptoms or additional notes"></textarea>
 
 </div>
@@ -590,6 +645,71 @@ Orthopaedics • Paediatrics • Dietitian & Nutrition
 </div>
 
 </footer>
+
+<script>
+
+document.getElementById('appointment_date').min =
+new Date().toISOString().split('T')[0];
+
+</script>
+
+<script>
+
+document.getElementById('ic_number')
+.addEventListener('input', function(){
+
+let value = this.value.replace(/\D/g,'');
+
+if(value.length > 6){
+value =
+value.substring(0,6)
++
+'-'
++
+value.substring(6);
+}
+
+if(value.length > 9){
+value =
+value.substring(0,9)
++
+'-'
++
+value.substring(9);
+}
+
+this.value = value;
+
+});
+
+</script>
+
+<script>
+
+document.getElementById('phone')
+.addEventListener('input', function(){
+
+let value = this.value.replace(/\D/g,'');
+
+if(value.length > 3){
+value =
+value.substring(0,3) +
+'-' +
+value.substring(3);
+}
+
+if(value.length > 7){
+value =
+value.substring(0,7) +
+'-' +
+value.substring(7);
+}
+
+this.value = value;
+
+});
+
+</script>
 
 </body>
 </html>

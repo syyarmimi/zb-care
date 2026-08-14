@@ -38,8 +38,20 @@ body{
     font-size:30px;
     font-weight:800;
     color:#0d6efd !important;
+    text-decoration:none;
+    cursor:pointer;
 }
 
+.navbar-brand img{
+    height:50px;
+    width:auto;
+}
+
+.navbar-brand span{
+    color:#2563eb;
+    font-weight:800;
+    font-size:28px;
+}
 .nav-link{
     color:#334155 !important;
     font-weight:500;
@@ -317,8 +329,11 @@ footer{
 
 <div class="container">
 
-<a class="navbar-brand">
+<a href="index.php"
+class="navbar-brand text-decoration-none">
+
 🏥 ZB-CARE
+
 </a>
 
 <button class="navbar-toggler"
@@ -334,15 +349,15 @@ data-bs-target="#navMenu">
 <ul class="navbar-nav ms-auto align-items-center">
 
 <li class="nav-item">
-<a class="nav-link" href="#">Home</a>
+<a class="nav-link" href="#home">Home</a>
 </li>
 
 <li class="nav-item">
-<a class="nav-link" href="#">Services</a>
+<a class="nav-link" href="#services">Services</a>
 </li>
 
 <li class="nav-item">
-<a class="nav-link" href="#">Specialists</a>
+<a class="nav-link" href="#specialists">Specialists</a>
 </li>
 
 <li class="nav-item ms-3">
@@ -362,7 +377,7 @@ data-bs-target="#navMenu">
      HERO
 ========================= -->
 
-<section class="hero">
+<section class="hero" id="home">
 
 <div class="container">
 
@@ -373,17 +388,16 @@ data-bs-target="#navMenu">
 </div>
 
 <h1 class="hero-title">
-
-Professional <span>Healthcare</span><br>
-For Better Patient Care
-
+Modern <span>Hospital Management</span><br>
+For Better Healthcare Delivery
 </h1>
 
 <p class="hero-text">
 
-ZB-CARE provides outpatient appointment management,
-specialist healthcare services, and patient support
-for Orthopaedics, Paediatrics, and Dietitian consultation.
+ZB-CARE is an integrated hospital management system
+supporting appointment scheduling, walk-in consultations,
+patient admissions, ward management, diagnosis recording,
+and medication administration for efficient healthcare services.
 
 </p>
 
@@ -396,13 +410,6 @@ Book Appointment
 
 </a>
 
-<a href="pages/staff_portal.php"
-class="btn btn-staff">
-
-Staff Login
-
-</a>
-
 </div>
 
 </div>
@@ -412,61 +419,10 @@ Staff Login
 </section>
 
 <!-- =========================
-     SEARCH BOX
-========================= -->
-
-<div class="container">
-
-<div class="search-box">
-
-<div class="row g-3 align-items-center">
-
-<div class="col-md-5">
-
-<input type="text"
-class="form-control"
-placeholder="Search specialist or service">
-
-</div>
-
-<div class="col-md-4">
-
-<select class="form-select">
-
-<option>Select Department</option>
-
-<option>Orthopaedics</option>
-
-<option>Paediatrics</option>
-
-<option>Dietitian & Nutrition</option>
-
-</select>
-
-</div>
-
-<div class="col-md-3">
-
-<a href="pages/appointment.php"
-class="btn btn-primary w-100 h-100 d-flex align-items-center justify-content-center">
-
-Book Now
-
-</a>
-
-</div>
-
-</div>
-
-</div>
-
-</div>
-
-<!-- =========================
      SERVICES
 ========================= -->
 
-<section class="section">
+<section class="section" id="services">
 
 <div class="container">
 
@@ -493,15 +449,15 @@ Professional specialist healthcare services for outpatient consultation and pati
 <div class="service-card">
 
 <div class="service-icon bg-primary text-white">
-🦴
+📅
 </div>
 
-<h4>Orthopaedic Care</h4>
+<h4>Appointment Management</h4>
 
 <p class="text-muted mt-3">
 
-Specialist treatment for bone injuries,
-joint pain, fractures, and mobility support.
+Online appointment booking,
+doctor scheduling and patient notifications.
 
 </p>
 
@@ -516,15 +472,15 @@ joint pain, fractures, and mobility support.
 <div class="service-card">
 
 <div class="service-icon bg-success text-white">
-👶
+🚶
 </div>
 
-<h4>Paediatric Care</h4>
+<h4>Walk-In Consultation</h4>
 
 <p class="text-muted mt-3">
 
-Healthcare services for infants,
-children, and adolescent patients.
+Immediate consultation services
+for patients without prior appointments.
 
 </p>
 
@@ -532,51 +488,47 @@ children, and adolescent patients.
 
 </div>
 
-<!-- DIET -->
+<!-- MEDICATION -->
+
+<div class="col-md-3">
+
+<div class="service-card">
+
+<div class="service-icon bg-info text-white">
+🛏️
+</div>
+
+<h4>Patient Admission</h4>
+
+<p class="text-muted mt-3">
+
+Admission workflow,
+bed allocation and ward management.
+
+</p>
+
+</div>
+
+</div>
+
+<!-- MEDICATION -->
 
 <div class="col-md-3">
 
 <div class="service-card">
 
 <div class="service-icon bg-danger text-white">
-🥗
+💊
 </div>
 
-<h4>Dietitian Consultation</h4>
+<h4>Medication Management</h4>
 
 <p class="text-muted mt-3">
 
-Nutrition assessment and healthy meal planning
-for patient wellbeing.
+Medication prescribing,
+preparation, delivery and administration.
 
 </p>
-
-</div>
-
-</div>
-
-<!-- HEALTH -->
-
-<div class="col-md-3">
-
-<div class="service-card">
-
-<div class="service-icon bg-warning text-white">
-🩺
-</div>
-
-<h4>Health Screening</h4>
-
-<p class="text-muted mt-3">
-
-Routine health monitoring and early
-medical assessment support.
-
-</p>
-
-</div>
-
-</div>
 
 </div>
 
@@ -616,7 +568,7 @@ better patient monitoring, and improved healthcare service delivery.
 <a href="pages/appointment.php"
 class="btn btn-primary btn-lg mt-3 px-4">
 
-Book Consultation
+Book Appointment
 
 </a>
 
@@ -639,7 +591,7 @@ class="info-img">
      SPECIALIST AREA
 ========================= -->
 
-<section class="section">
+<section class="section" id="specialists">
 
 <div class="container">
 
@@ -710,15 +662,15 @@ Healthcare services focused on child wellness and development.
 <div class="department-card">
 
 <div class="department-icon">
-🥗
+🚶
 </div>
 
-<h4>Dietitian & Nutrition</h4>
+<h4>Medication Management</h4>
 
 <p class="text-muted">
 
-Nutrition planning and dietary consultation for patients.
-
+Medication prescribing, preparation,
+delivery and administration management.
 </p>
 
 </div>

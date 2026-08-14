@@ -19,29 +19,47 @@ if(isset($_GET['deliver'])){
     try {
 
         // ✅ INSERT DELIVERY RECORD (FIXED NO SEQUENCE)
-        $sqlInsert = "INSERT INTO SYARMIMI.MEDICATION_DELIVERY
-                      (MEDDELIVERY_ID, DELIVERY_TIME, STATUS, STAFF_ID)
-                      VALUES (
-                        (SELECT NVL(MAX(MEDDELIVERY_ID),0)+1 FROM SYARMIMI.MEDICATION_DELIVERY),
-                        SYSDATE,
-                        'Delivered',
-                        :staff
-                      )";
+      $sqlInsert = "
+INSERT INTO SYARMIMI.MEDICATION_DELIVERY
+(
+    MEDDELIVERY_ID,
+    DELIVERY_TIME,
+    STATUS,
+    ACCOUNT_ID,
+    MEDORDER_ID
+)
+VALUES
+(
+    (SELECT NVL(MAX(MEDDELIVERY_ID),0)+1
+     FROM SYARMIMI.MEDICATION_DELIVERY),
 
-        $stmt = $conn->prepare($sqlInsert);
-        $stmt->execute([
-            ':staff' => $staffId
-        ]);
+    SYSDATE,
 
-        // ✅ UPDATE STATUS IN PREPARATION
-        $sqlUpdate = "UPDATE SYARMIMI.PHARMACY_PREPARATION
-                      SET STATUS = 'Delivered'
-                      WHERE MEDORDER_ID = :id";
+    'Delivered',
 
-        $stmt = $conn->prepare($sqlUpdate);
-        $stmt->execute([
-            ':id' => $medOrderId
-        ]);
+    :staff,
+
+    :medorder
+)
+";
+
+$check = $conn->prepare("
+SELECT COUNT(*)
+FROM SYARMIMI.MEDICATION_DELIVERY
+WHERE MEDORDER_ID = :id
+");
+
+$check->execute([
+    ':id' => $medOrderId
+]);
+
+if($check->fetchColumn() == 0){
+    $stmt = $conn->prepare($sqlInsert);
+    $stmt->execute([
+        ':staff'    => $staffId,
+        ':medorder' => $medOrderId
+    ]);
+}
 
        header("Location: med_delivery.php?success=1");
         exit();

@@ -73,6 +73,9 @@ $stmt = $conn->query($sql);
 <title>Manage Staff</title>
 
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+<link rel="stylesheet"
+href="https://cdn.datatables.net/1.13.8/css/dataTables.bootstrap5.min.css">
 
 <style>
 
@@ -129,6 +132,40 @@ body{
     color:white;
 }
 
+.sidebar{
+width:260px !important;
+min-width:260px !important;
+max-width:260px !important;
+height:100vh;
+flex-shrink:0;
+}
+
+.dataTables_filter{
+    display:none;
+}
+
+.dataTables_length{
+    display:block;
+}
+
+.dataTables_info{
+    margin-top:15px;
+}
+
+.dataTables_paginate{
+    margin-top:15px;
+}
+
+.dataTables_wrapper .dataTables_paginate .paginate_button.current{
+    background:#2563eb !important;
+    color:white !important;
+    border:none !important;
+}
+
+.dataTables_wrapper .dataTables_paginate .paginate_button:hover{
+    background:#2563eb !important;
+    color:white !important;
+}
 </style>
 
 </head>
@@ -254,9 +291,73 @@ Add Staff
 Staff List
 </h4>
 
+<div class="row mb-4">
+
+<div class="col-md-4">
+
+<input type="text"
+id="searchBox"
+class="form-control"
+placeholder="🔍 Search staff">
+
+</div>
+
+<div class="col-md-4">
+
+<select id="roleFilter"
+class="form-select">
+
+<option value="">
+All Roles
+</option>
+
+<option value="ADMIN">
+Admin
+</option>
+
+<option value="DOCTOR">
+Doctor
+</option>
+
+<option value="NURSE">
+Nurse
+</option>
+
+<option value="PHARMACIST">
+Pharmacist
+</option>
+
+<option value="KITCHEN">
+Kitchen
+</option>
+
+</select>
+
+</div>
+
+<div class="col-md-4">
+
+<select id="sortFilter"
+class="form-select">
+
+<option value="desc">
+Newest First
+</option>
+
+<option value="asc">
+Oldest First
+</option>
+
+</select>
+
+</div>
+
+</div>
+
 <div class="table-responsive">
 
-<table class="table table-bordered table-hover align-middle">
+<table id="staffTable"
+class="table table-bordered table-hover align-middle">
 
 <thead>
 
@@ -375,6 +476,66 @@ role.addEventListener('change', function(){
 });
 
 department.disabled = true;
+
+</script>
+
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+
+<script src="https://cdn.datatables.net/1.13.8/js/jquery.dataTables.min.js"></script>
+
+<script src="https://cdn.datatables.net/1.13.8/js/dataTables.bootstrap5.min.js"></script>
+
+<script>
+
+$(document).ready(function(){
+
+    var table = $('#staffTable').DataTable({
+
+        pageLength: 10,
+
+        order: [[0, 'desc']],
+
+        lengthMenu: [
+            [10,25,50,100],
+            [10,25,50,100]
+        ]
+
+    });
+
+    /* SEARCH */
+
+    $('#searchBox').on('keyup', function(){
+
+        table.search(this.value).draw();
+
+    });
+
+    /* ROLE FILTER */
+
+    $('#roleFilter').on('change', function(){
+
+        table.column(2)
+             .search(this.value)
+             .draw();
+
+    });
+
+    /* SORT */
+
+    $('#sortFilter').on('change', function(){
+
+        if(this.value == 'asc')
+        {
+            table.order([0,'asc']).draw();
+        }
+        else
+        {
+            table.order([0,'desc']).draw();
+        }
+
+    });
+
+});
 
 </script>
 
