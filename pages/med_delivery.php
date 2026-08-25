@@ -1,172 +1,536 @@
 <?php
+
 session_start();
 include("../config/config.php");
 
-// ✅ ROLE CHECK
-if (!isset($_SESSION['role']) || $_SESSION['role'] != 'pharmacist') {
+// ============================================================
+// ROLE CHECK
+// ============================================================
+if (!isset($_SESSION['role']) || $_SESSION['role'] !== 'pharmacist') {
     header("Location: ../auth/login.php");
     exit();
 }
 
-/* =========================
-   DELIVER ACTION
-========================= */
-if(isset($_GET['deliver'])){
 
-    $medOrderId = $_GET['deliver'];
-    $staffId = $_SESSION['user_id'];
+// ============================================================
+// HANDLE NURSE COLLECTED ACTION
+// ============================================================
+// Workflow:
+//
+// Pharmacy Preparation
+// Ready For Nurse Pickup
+//          ↓
+// Nurse collects medication
+//          ↓
+// Pharmacist confirms
+//          ↓
+// Collected
+//
+// IMPORTANT:
+// We use PREP_ID here, NOT MEDORDER_ID.
+// ============================================================
+
+if (isset($_GET['nurse_collected'])) {
+
+    $prepId = (int) $_GET['nurse_collected'];
+
+    $staffId = $_SESSION['user_id'] ?? null;
 
     try {
 
-        // ✅ INSERT DELIVERY RECORD (FIXED NO SEQUENCE)
-      $sqlInsert = "
-INSERT INTO SYARMIMI.MEDICATION_DELIVERY
-(
-    MEDDELIVERY_ID,
-    DELIVERY_TIME,
-    STATUS,
-    ACCOUNT_ID,
-    MEDORDER_ID
-)
-VALUES
-(
-    (SELECT NVL(MAX(MEDDELIVERY_ID),0)+1
-     FROM SYARMIMI.MEDICATION_DELIVERY),
+        // ====================================================
+        // 1. FIND THE PREPARATION RECORD
+        // ====================================================
+        //
+        // Use PREP_ID because every pharmacy preparation
+        // record has its own PREP_ID.
+        //
+        // We also make sure:
+        // - Medication belongs to an admission
+        // - Status is Ready For Nurse Pickup
+        //
+        // ====================================================
 
-    SYSDATE,
+        $checkStmt = $conn->prepare("
+            SELECT
+                pp.PREP_ID,
+                pp.MEDORDER_ID,
+                pp.STATUS,
+                pp.ACCOUNT_ID,
+                mo.ADMISSION_ID
+            FROM SYARMIMI.PHARMACY_PREPARATION pp
+            INNER JOIN SYARMIMI.MEDICATION_ORDER mo
+                ON pp.MEDORDER_ID = mo.MEDORDER_ID
+            WHERE pp.PREP_ID = :prep_id
+              AND mo.ADMISSION_ID IS NOT NULL
+              AND pp.STATUS = 'Ready For Nurse Pickup'
+        ");
 
-    'Delivered',
+        $checkStmt->execute([
+            ':prep_id' => $prepId
+        ]);
 
-    :staff,
+        $preparation = $checkStmt->fetch(PDO::FETCH_ASSOC);
 
-    :medorder
-)
-";
 
-$check = $conn->prepare("
-SELECT COUNT(*)
-FROM SYARMIMI.MEDICATION_DELIVERY
-WHERE MEDORDER_ID = :id
-");
+        // ====================================================
+        // 2. CHECK WHETHER RECORD EXISTS
+        // ====================================================
 
-$check->execute([
-    ':id' => $medOrderId
-]);
+        if (!$preparation) {
 
-if($check->fetchColumn() == 0){
-    $stmt = $conn->prepare($sqlInsert);
-    $stmt->execute([
-        ':staff'    => $staffId,
-        ':medorder' => $medOrderId
-    ]);
-}
+            echo "
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset='UTF-8'>
+                <title>Error</title>
 
-       header("Location: med_delivery.php?success=1");
+                <script src='https://cdn.jsdelivr.net/npm/sweetalert2@11'></script>
+            </head>
+
+            <body>
+
+            <script>
+
+            Swal.fire({
+                icon: 'warning',
+                title: 'Medication Not Available',
+                text: 'This medication is not available for nurse pickup or has already been collected.',
+                confirmButtonColor: '#0dcaf0'
+            }).then(function() {
+                window.location.href = 'med_delivery.php';
+            });
+
+            </script>
+
+            </body>
+            </html>
+            ";
+
+            exit();
+        }
+
+
+        // ====================================================
+        // GET MEDORDER_ID
+        // ====================================================
+
+        $medOrderId = $preparation['MEDORDER_ID'];
+
+
+        // ====================================================
+        // START TRANSACTION
+        // ====================================================
+
+        $conn->beginTransaction();
+
+
+        // ====================================================
+        // 3. UPDATE PHARMACY PREPARATION
+        // ====================================================
+        //
+        // Ready For Nurse Pickup
+        //          ↓
+        //       Collected
+        //
+        // IMPORTANT:
+        // Update using PREP_ID.
+        // ====================================================
+
+        $updateStmt = $conn->prepare("
+            UPDATE SYARMIMI.PHARMACY_PREPARATION
+            SET STATUS = 'Collected'
+            WHERE PREP_ID = :prep_id
+              AND STATUS = 'Ready For Nurse Pickup'
+        ");
+
+        $updateStmt->execute([
+            ':prep_id' => $prepId
+        ]);
+
+
+        // ====================================================
+        // CHECK UPDATE
+        // ====================================================
+
+        if ($updateStmt->rowCount() === 0) {
+
+            $conn->rollBack();
+
+            echo "
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset='UTF-8'>
+                <script src='https://cdn.jsdelivr.net/npm/sweetalert2@11'></script>
+            </head>
+
+            <body>
+
+            <script>
+
+            Swal.fire({
+                icon: 'warning',
+                title: 'Unable to Update',
+                text: 'The medication status could not be updated. It may have already been collected.',
+                confirmButtonColor: '#0dcaf0'
+            }).then(function() {
+                window.location.href = 'med_delivery.php';
+            });
+
+            </script>
+
+            </body>
+            </html>
+            ";
+
+            exit();
+        }
+
+
+        // ====================================================
+        // 4. CHECK MEDICATION DELIVERY RECORD
+        // ====================================================
+        //
+        // One delivery record per medication order.
+        //
+        // ====================================================
+
+        $checkDeliveryStmt = $conn->prepare("
+            SELECT COUNT(*)
+            FROM SYARMIMI.MEDICATION_DELIVERY
+            WHERE MEDORDER_ID = :medorder_id
+        ");
+
+        $checkDeliveryStmt->execute([
+            ':medorder_id' => $medOrderId
+        ]);
+
+        $deliveryExists = (int) $checkDeliveryStmt->fetchColumn();
+
+
+        // ====================================================
+        // 5. INSERT DELIVERY RECORD
+        // ====================================================
+
+        if ($deliveryExists === 0) {
+
+            $insertDeliveryStmt = $conn->prepare("
+                INSERT INTO SYARMIMI.MEDICATION_DELIVERY
+                (
+                    MEDDELIVERY_ID,
+                    DELIVERY_TIME,
+                    STATUS,
+                    ACCOUNT_ID,
+                    MEDORDER_ID
+                )
+                VALUES
+                (
+                    (
+                        SELECT NVL(MAX(MEDDELIVERY_ID), 0) + 1
+                        FROM SYARMIMI.MEDICATION_DELIVERY
+                    ),
+                    SYSDATE,
+                    'Delivered',
+                    :account_id,
+                    :medorder_id
+                )
+            ");
+
+            $insertDeliveryStmt->execute([
+                ':account_id'  => $staffId,
+                ':medorder_id' => $medOrderId
+            ]);
+        }
+
+
+        // ====================================================
+        // 6. COMMIT
+        // ====================================================
+
+        $conn->commit();
+
+
+        // ====================================================
+        // 7. REDIRECT
+        // ====================================================
+
+        header("Location: med_delivery.php?success=1");
         exit();
 
-    } catch(PDOException $e){
-        die("Error: " . $e->getMessage());
+
+    } catch (PDOException $e) {
+
+        // ====================================================
+        // ROLLBACK
+        // ====================================================
+
+        if ($conn->inTransaction()) {
+            $conn->rollBack();
+        }
+
+        die("Error updating medication delivery: " . $e->getMessage());
     }
 }
 
-/* =========================
-   FETCH PREPARED MEDICATION
-========================= */
+
+// ============================================================
+// COUNT READY MEDICATIONS
+// ============================================================
+
+$deliveryCountStmt = $conn->query("
+    SELECT COUNT(*)
+    FROM SYARMIMI.PHARMACY_PREPARATION pp
+
+    INNER JOIN SYARMIMI.MEDICATION_ORDER mo
+        ON pp.MEDORDER_ID = mo.MEDORDER_ID
+
+    WHERE mo.ADMISSION_ID IS NOT NULL
+      AND pp.STATUS = 'Ready For Nurse Pickup'
+");
+
+$deliveryCount = (int) $deliveryCountStmt->fetchColumn();
+
+
+// ============================================================
+// FETCH MEDICATIONS READY FOR NURSE PICKUP
+// ============================================================
+//
+// Only:
+// - Admission medication
+// - Ready For Nurse Pickup
+//
+// ============================================================
+
 $sql = "
 
 SELECT
 
-mo.MEDORDER_ID,
+    pp.PREP_ID,
 
-p.NAME,
+    pp.MEDORDER_ID,
 
-m.MEDICATION_NAME,
+    p.NAME AS PATIENT_NAME,
 
-mo.DOSAGE,
+    m.MEDICATION_NAME,
 
-mo.FREQUENCY,
+    mo.DOSAGE,
 
-pp.STATUS,
+    mo.FREQUENCY,
 
-CASE
+    pp.STATUS,
 
-WHEN mo.ADMISSION_ID IS NOT NULL
-THEN 'Admission'
+    TO_CHAR(
+        pp.PREPARED_TIME,
+        'DD-Mon-YYYY'
+    ) AS PREPARED_DATE,
 
-WHEN mo.APPOINTMENT_ID IS NOT NULL
-THEN 'Appointment'
+    NVL(
+        w.WARD_NAME,
+        '-'
+    ) AS WARD_NAME,
 
-WHEN mo.CONSULTATION_ID IS NOT NULL
-THEN 'Walk-In'
+    NVL(
+        b.BED_NUMBER,
+        '-'
+    ) AS BED_NUMBER
 
-ELSE 'Unknown'
+FROM SYARMIMI.PHARMACY_PREPARATION pp
 
-END AS ORDER_TYPE,
+INNER JOIN SYARMIMI.MEDICATION_ORDER mo
+    ON pp.MEDORDER_ID = mo.MEDORDER_ID
 
-CASE
-WHEN mo.ADMISSION_ID IS NOT NULL
-THEN 'Nurse Pickup'
-ELSE 'Patient Pickup'
-END AS PICKUP_METHOD
+INNER JOIN SYARMIMI.PATIENT p
+    ON mo.PATIENT_ID = p.PATIENT_ID
 
-FROM SYARMIMI.MEDICATION_ORDER mo
+INNER JOIN SYARMIMI.MEDICATION m
+    ON mo.MEDICATION_ID = m.MEDICATION_ID
 
-JOIN SYARMIMI.PHARMACY_PREPARATION pp
-ON mo.MEDORDER_ID = pp.MEDORDER_ID
+LEFT JOIN SYARMIMI.ADMISSION a
+    ON mo.ADMISSION_ID = a.ADMISSION_ID
 
-JOIN SYARMIMI.PATIENT p
-ON mo.PATIENT_ID = p.PATIENT_ID
+LEFT JOIN SYARMIMI.BED b
+    ON a.BED_ID = b.BED_ID
 
-JOIN SYARMIMI.MEDICATION m
-ON mo.MEDICATION_ID = m.MEDICATION_ID
+LEFT JOIN SYARMIMI.WARD w
+    ON b.WARD_ID = w.WARD_ID
 
-WHERE pp.STATUS = 'Prepared'
+WHERE mo.ADMISSION_ID IS NOT NULL
 
-ORDER BY mo.MEDORDER_ID DESC
+  AND pp.STATUS = 'Ready For Nurse Pickup'
+
+ORDER BY pp.PREP_ID DESC
 
 ";
 
-$deliveryCount = $conn->query("
-
-SELECT COUNT(*)
-
-FROM SYARMIMI.PHARMACY_PREPARATION
-
-WHERE STATUS = 'Prepared'
-
-")->fetchColumn();
-
 $stmt = $conn->query($sql);
+
 ?>
 
 <!DOCTYPE html>
-<html>
+
+<html lang="en">
+
 <head>
+
+<meta charset="UTF-8">
+
+<meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+>
+
 <title>Medication Delivery</title>
 
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons/font/bootstrap-icons.css" rel="stylesheet">
-<link rel="stylesheet"
-href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css">
-<script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 
-<?php if(isset($_GET['success'])): ?>
+<!-- =========================================================
+     BOOTSTRAP
+========================================================= -->
+
+<link
+    href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
+    rel="stylesheet"
+>
+
+
+<!-- =========================================================
+     BOOTSTRAP ICONS
+========================================================= -->
+
+<link
+    href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css"
+    rel="stylesheet"
+>
+
+
+<!-- =========================================================
+     DATATABLES
+========================================================= -->
+
+<link
+    rel="stylesheet"
+    href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css"
+>
+
+
+<!-- =========================================================
+     SWEETALERT
+========================================================= -->
+
+<script
+    src="https://cdn.jsdelivr.net/npm/sweetalert2@11"
+></script>
+
+
+<style>
+
+body {
+
+    background: #f4f6f9;
+
+}
+
+
+.main-content {
+
+    min-height: 100vh;
+
+}
+
+
+.card {
+
+    border-radius: 12px;
+
+}
+
+
+.table td {
+
+    vertical-align: middle;
+
+}
+
+
+.table th {
+
+    white-space: nowrap;
+
+}
+
+
+.badge {
+
+    padding: 8px 12px;
+
+    border-radius: 20px;
+
+    font-size: 12px;
+
+    white-space: nowrap;
+
+}
+
+
+.page-title {
+
+    color: #172033;
+
+}
+
+
+.table thead th {
+
+    background: #212529;
+
+    color: white;
+
+    border: none;
+
+}
+
+
+.dataTables_wrapper
+.dataTables_filter {
+
+    display: none;
+
+}
+
+
+.dataTables_wrapper
+.dataTables_length {
+
+    margin-bottom: 10px;
+
+}
+
+
+</style>
+
+
+<!-- =========================================================
+     SUCCESS MESSAGE
+========================================================= -->
+
+<?php if (isset($_GET['success'])): ?>
 
 <script>
 
-document.addEventListener('DOMContentLoaded', function(){
+document.addEventListener('DOMContentLoaded', function() {
 
-Swal.fire({
+    Swal.fire({
 
-icon:'success',
+        icon: 'success',
 
-title:'Medication Delivered',
+        title: 'Nurse Collected',
 
-text:'Medication delivery has been completed successfully.',
+        text: 'The medication has been marked as collected by the nurse.',
 
-confirmButtonColor:'#198754'
+        confirmButtonColor: '#198754'
 
-});
+    });
 
 });
 
@@ -174,201 +538,341 @@ confirmButtonColor:'#198754'
 
 <?php endif; ?>
 
-<style>
-body { background:#f4f6f9; }
-</style>
+
 </head>
+
 
 <body>
 
+
 <div class="d-flex">
+
+
+<!-- =========================================================
+     SIDEBAR
+========================================================= -->
 
 <?php include("../includes/sidebar_pharma.php"); ?>
 
-<div class="flex-grow-1 p-4">
+
+<!-- =========================================================
+     MAIN CONTENT
+========================================================= -->
+
+<div class="main-content flex-grow-1 p-4">
+
+
+<!-- =========================================================
+     HEADER
+========================================================= -->
 
 <div class="d-flex justify-content-between align-items-center mb-4">
 
-<div>
+    <div>
 
-<h3 class="fw-bold mb-0">
-🚚 Medication Delivery
-</h3>
+        <h3 class="fw-bold mb-0 page-title">
 
-<small class="text-muted">
-Manage medication pickup and delivery workflow
-</small>
+            🚚 Medication Delivery
+
+        </h3>
+
+        <small class="text-muted">
+
+            Confirm medication collected by nurse
+
+        </small>
+
+    </div>
+
+
+    <div>
+
+        <span class="badge bg-info fs-6 p-2">
+
+            Ready:
+            <?= htmlspecialchars($deliveryCount) ?>
+
+        </span>
+
+    </div>
 
 </div>
 
-<div>
 
-<span class="badge bg-primary fs-6 p-2">
-Ready: <?= $deliveryCount ?>
-</span>
+<!-- =========================================================
+     INFORMATION ALERT
+========================================================= -->
+
+<?php if ($deliveryCount > 0): ?>
+
+<div class="alert alert-info">
+
+    👩‍⚕️
+
+    <strong>
+        <?= htmlspecialchars($deliveryCount) ?>
+    </strong>
+
+    medication(s) are ready for nurse pickup today.
 
 </div>
 
+<?php else: ?>
+
+<div class="alert alert-secondary">
+
+    No medication is currently waiting for nurse pickup.
+
 </div>
+
+<?php endif; ?>
+
+
+<!-- =========================================================
+     TABLE CARD
+========================================================= -->
 
 <div class="card p-3 shadow-sm mt-3">
 
-<h5>Prepared Medication List</h5>
+
+<h5 class="mb-3">
+
+    Medication Waiting for Nurse Pickup
+
+</h5>
+
+
+<!-- =========================================================
+     FILTERS
+========================================================= -->
 
 <div class="row mb-3">
 
-<div class="col-md-4">
 
-<input
-type="text"
-id="searchInput"
-class="form-control"
-placeholder="🔍 Search patient or medication">
+    <!-- SEARCH -->
 
-</div>
+    <div class="col-md-4">
 
-<div class="col-md-3">
+        <input
+            type="text"
+            id="searchInput"
+            class="form-control"
+            placeholder="🔍 Search patient or medication"
+        >
 
-<select
-id="typeFilter"
-class="form-select">
+    </div>
 
-<option value="">
-All Types
-</option>
 
-<option value="Walk-In">
-Walk-In
-</option>
+    <!-- SORT -->
 
-<option value="Appointment">
-Appointment
-</option>
+    <div class="col-md-3">
 
-<option value="Admission">
-Admission
-</option>
+        <select
+            id="sortFilter"
+            class="form-select"
+        >
 
-</select>
+            <option value="desc">
 
-</div>
+                Newest First
 
-<div class="col-md-3">
+            </option>
 
-<select
-id="sortFilter"
-class="form-select">
+            <option value="asc">
 
-<option value="desc">
-Newest First
-</option>
+                Oldest First
 
-<option value="asc">
-Oldest First
-</option>
+            </option>
 
-</select>
+        </select>
+
+    </div>
+
 
 </div>
 
-</div>
+
+<!-- =========================================================
+     TABLE
+========================================================= -->
+
+<div class="table-responsive">
 
 <table
-id="deliveryTable"
-class="table table-hover align-middle">
+    id="deliveryTable"
+    class="table table-hover align-middle"
+>
 
-<thead class="table-dark">
+<thead>
+
 <tr>
 
-<th>ID</th>
-<th>Patient</th>
-<th>Type</th>
-<th>Pickup Method</th>
-<th>Medication</th>
-<th>Dosage</th>
-<th>Frequency</th>
-<th>Status</th>
-<th>Action</th>
+    <th>Prep ID</th>
+
+    <th>Patient</th>
+
+    <th>Location</th>
+
+    <th>Medication</th>
+
+    <th>Dosage</th>
+
+    <th>Frequency</th>
+
+    <th>Prepared</th>
+
+    <th>Status</th>
+
+    <th>Action</th>
 
 </tr>
+
 </thead>
+
 
 <tbody>
 
-<?php while($row = $stmt->fetch(PDO::FETCH_ASSOC)) { ?>
+
+<?php while ($row = $stmt->fetch(PDO::FETCH_ASSOC)): ?>
+
 
 <tr>
 
-<td><?= $row['MEDORDER_ID']; ?></td>
 
-<td><?= $row['NAME']; ?></td>
-
-<td>
-
-<?php
-
-if($row['ORDER_TYPE']=='Admission')
-{
-echo "<span class='badge bg-danger'>Admission</span>";
-}
-elseif($row['ORDER_TYPE']=='Appointment')
-{
-echo "<span class='badge bg-primary'>Appointment</span>";
-}
-else
-{
-echo "<span class='badge bg-warning text-dark'>Walk-In</span>";
-}
-
-?>
-
-</td>
+<!-- =====================================================
+     PREPARATION ID
+===================================================== -->
 
 <td>
 
-<?php
-
-if($row['PICKUP_METHOD']=='Nurse Pickup')
-{
-    echo "<span class='badge bg-info'>Nurse Pickup</span>";
-}
-else
-{
-    echo "<span class='badge bg-success'>Patient Pickup</span>";
-}
-
-?>
+    <?= htmlspecialchars($row['PREP_ID']) ?>
 
 </td>
 
-<td><?= $row['MEDICATION_NAME']; ?></td>
 
-<td><?= $row['DOSAGE']; ?></td>
-
-<td><?= $row['FREQUENCY']; ?></td>
+<!-- =====================================================
+     PATIENT
+===================================================== -->
 
 <td>
 
-<span class="badge bg-warning text-dark">
-Prepared
-</span>
+    <strong>
+
+        <?= htmlspecialchars($row['PATIENT_NAME']) ?>
+
+    </strong>
 
 </td>
+
+
+<!-- =====================================================
+     LOCATION
+===================================================== -->
 
 <td>
 
-<a href="med_delivery.php?deliver=<?= $row['MEDORDER_ID']; ?>"
-class="btn btn-success btn-sm deliverBtn">
+    <?= htmlspecialchars($row['WARD_NAME']) ?>
 
-Deliver
+    <?php if ($row['BED_NUMBER'] !== '-'): ?>
 
-</a>
+        <br>
+
+        <small class="text-muted">
+
+            Bed
+            <?= htmlspecialchars($row['BED_NUMBER']) ?>
+
+        </small>
+
+    <?php endif; ?>
 
 </td>
+
+
+<!-- =====================================================
+     MEDICATION
+===================================================== -->
+
+<td>
+
+    <?= htmlspecialchars($row['MEDICATION_NAME']) ?>
+
+</td>
+
+
+<!-- =====================================================
+     DOSAGE
+===================================================== -->
+
+<td>
+
+    <?= htmlspecialchars($row['DOSAGE']) ?>
+
+</td>
+
+
+<!-- =====================================================
+     FREQUENCY
+===================================================== -->
+
+<td>
+
+    <?= htmlspecialchars($row['FREQUENCY']) ?>
+
+</td>
+
+
+<!-- =====================================================
+     PREPARED DATE
+===================================================== -->
+
+<td>
+
+    <?= htmlspecialchars($row['PREPARED_DATE']) ?>
+
+</td>
+
+
+<!-- =====================================================
+     STATUS
+===================================================== -->
+
+<td>
+
+    <span class="badge bg-info">
+
+        Ready For Nurse Pickup
+
+    </span>
+
+</td>
+
+
+<!-- =====================================================
+     ACTION
+===================================================== -->
+
+<td>
+
+    <a
+        href="med_delivery.php?nurse_collected=<?= urlencode($row['PREP_ID']) ?>"
+        class="btn btn-success btn-sm nurseCollectedBtn"
+    >
+
+        <i class="bi bi-check-circle"></i>
+
+        Nurse Collected
+
+    </a>
+
+</td>
+
 
 </tr>
 
-<?php } ?>
+
+<?php endwhile; ?>
+
 
 </tbody>
 
@@ -376,118 +880,171 @@ Deliver
 
 </div>
 
-</div>
 
 </div>
 
-<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
 
-<script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+</div>
 
-<script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"></script>
 
-<script>
+</div>
 
-$(document).ready(function(){
 
-var table =
-$('#deliveryTable').DataTable({
+<!-- =========================================================
+     JAVASCRIPT
+========================================================= -->
 
-pageLength:10,
+<script
+    src="https://code.jquery.com/jquery-3.7.1.min.js"
+></script>
 
-lengthMenu:[
-[10,25,50,100],
-[10,25,50,100]
-],
 
-order:[[0,'desc']],
+<script
+    src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"
+></script>
 
-dom:'t'
 
-});
+<script
+    src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"
+></script>
 
-$('#searchInput').on('keyup', function(){
-
-table.search(this.value).draw();
-
-});
-
-$('#typeFilter').on('change', function(){
-
-table.column(2)
-.search(this.value)
-.draw();
-
-});
-
-$('#sortFilter').on('change', function(){
-
-if(this.value=='asc')
-{
-table.order([0,'asc']).draw();
-}
-else
-{
-table.order([0,'desc']).draw();
-}
-
-});
-
-});
-
-</script>
 
 <script>
 
-document.querySelectorAll('.deliverBtn').forEach(button => {
 
-button.addEventListener('click', function(e){
+// ============================================================
+// DATATABLE
+// ============================================================
 
-e.preventDefault();
+$(document).ready(function() {
 
-let url = this.href;
 
-Swal.fire({
+    const table = $('#deliveryTable').DataTable({
 
-title:'Confirm Delivery',
+        pageLength: 10,
 
-html:`
+        lengthMenu: [
 
-Medication will be delivered to patient.
+            [10, 25, 50, 100],
 
-<br><br>
+            [10, 25, 50, 100]
 
-This action cannot be undone.
+        ],
 
-`,
+        order: [
 
-icon:'question',
+            [0, 'desc']
 
-showCancelButton:true,
+        ],
 
-confirmButtonColor:'#198754',
+        dom: 't'
 
-cancelButtonColor:'#6c757d',
+    });
 
-confirmButtonText:'Deliver',
 
-cancelButtonText:'Cancel'
+    // ========================================================
+    // SEARCH
+    // ========================================================
 
-})
-.then((result)=>{
+    $('#searchInput').on('keyup', function() {
 
-if(result.isConfirmed)
-{
-window.location.href=url;
-}
+        table
+            .search(this.value)
+            .draw();
+
+    });
+
+
+    // ========================================================
+    // SORT
+    // ========================================================
+
+    $('#sortFilter').on('change', function() {
+
+        table
+            .order([
+                [0, this.value]
+            ])
+            .draw();
+
+    });
+
+
+    // ========================================================
+    // NURSE COLLECTED CONFIRMATION
+    // ========================================================
+
+    $(document).on(
+        'click',
+        '.nurseCollectedBtn',
+        function(e) {
+
+            e.preventDefault();
+
+
+            const url = this.href;
+
+
+            Swal.fire({
+
+                title: 'Confirm Nurse Collection',
+
+                html: `
+
+                    <div class="text-start">
+
+                        <p>
+                            Has the nurse collected this
+                            medication from the pharmacy?
+                        </p>
+
+                        <p class="mb-0">
+
+                            <strong>
+                                The medication will be marked
+                                as Collected.
+                            </strong>
+
+                        </p>
+
+                    </div>
+
+                `,
+
+                icon: 'question',
+
+                showCancelButton: true,
+
+                confirmButtonColor: '#198754',
+
+                cancelButtonColor: '#6c757d',
+
+                confirmButtonText:
+                    'Yes, Nurse Collected',
+
+                cancelButtonText:
+                    'Cancel'
+
+            }).then(function(result) {
+
+                if (result.isConfirmed) {
+
+                    window.location.href = url;
+
+                }
+
+            });
+
+        }
+
+    );
 
 });
 
-});
-
-});
 
 </script>
+
 
 </body>
+
 </html>

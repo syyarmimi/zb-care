@@ -665,7 +665,8 @@ P.IC_NUMBER,
 'Inpatient' AS TYPE,
 S.USERNAME AS DOCTOR_NAME,
 W.WARD_NAME AS LOCATION,
-A.ADMISSION_DATE AS RECORD_DATE,
+TO_CHAR(A.ADMISSION_DATE, 'DD-MON-RR') AS RECORD_DATE,
+TO_CHAR(A.ADMISSION_DATE, 'YYYY-MM-DD') AS SORT_DATE,
 'Admitted' AS STATUS
 
 FROM SYARMIMI.ADMISSION A
@@ -713,7 +714,9 @@ Dr. <?= $row['DOCTOR_NAME'] ?>
 
 <td><?= $row['LOCATION'] ?></td>
 
-<td><?= $row['RECORD_DATE'] ?></td>
+<td data-order="<?= $row['SORT_DATE'] ?>">
+    <?= $row['RECORD_DATE'] ?>
+</td>
 
 <td>
 <span class="badge bg-success">
@@ -749,6 +752,31 @@ IC_NUMBER,
 DOCTOR_NAME,
 DEPARTMENT AS LOCATION,
 APPOINTMENT_DATE AS RECORD_DATE,
+
+CASE
+
+    WHEN REGEXP_LIKE(
+        APPOINTMENT_DATE,
+        '^[0-9]{2}-[A-Za-z]{3}-[0-9]{2}$'
+    )
+    THEN TO_CHAR(
+        TO_DATE(
+            UPPER(APPOINTMENT_DATE),
+            'DD-MON-RR'
+        ),
+        'YYYY-MM-DD'
+    )
+
+    WHEN REGEXP_LIKE(
+        APPOINTMENT_DATE,
+        '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+    )
+    THEN APPOINTMENT_DATE
+
+    ELSE NULL
+
+END AS SORT_DATE,
+
 STATUS
 
 FROM SYARMIMI.APPOINTMENT
@@ -782,7 +810,9 @@ Appointment
 
 <td><?= $row['LOCATION'] ?></td>
 
-<td><?= $row['RECORD_DATE'] ?></td>
+<td data-order="<?= htmlspecialchars($row['SORT_DATE']) ?>">
+    <?= htmlspecialchars($row['RECORD_DATE']) ?>
+</td>
 
 <td>
 
@@ -811,8 +841,6 @@ echo "<span class='badge bg-danger'>Rejected</span>";
 <td>-</td>
 
 </tr>
-
-
 
 <?php } ?>
 

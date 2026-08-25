@@ -1,576 +1,1194 @@
 <?php
-session_start();
 
-if (!isset($_SESSION['role']) || $_SESSION['role'] != 'admin') {
+session_start();
+include("../config/config.php");
+
+/* =========================================================
+   ROLE CHECK
+========================================================= */
+
+if (
+    !isset($_SESSION['role']) ||
+    $_SESSION['role'] !== 'admin'
+) {
     header("Location: ../auth/login.php");
     exit();
 }
 
-include("../config/config.php");
-include("../includes/send_mail.php");
 
-/* =========================
-   APPROVE APPOINTMENT
-========================= */
+/* =========================================================
+   STATISTICS
+========================================================= */
 
-if(isset($_GET['approve'])){
-
-    $id = $_GET['approve'];
-
-    /* GET APPOINTMENT INFO */
-
-  $stmt = $conn->prepare("
-SELECT PATIENT_NAME,
-       EMAIL,
-       DOCTOR_NAME,
-       ACCOUNT_ID,
-       APPOINTMENT_DATE,
-       APPOINTMENT_TIME
-FROM SYARMIMI.APPOINTMENT
-WHERE APPOINTMENT_ID = :id
-");
-
-$stmt->execute([
-    ':id'=>$id
-]);
-
-$appointment = $stmt->fetch(PDO::FETCH_ASSOC);
-
-$doctorId = $appointment['ACCOUNT_ID'];
-
-/* CHECK APPROVED SLOT */
-
-$check = $conn->prepare("
+$pendingCount = (int)$conn->query("
     SELECT COUNT(*)
     FROM SYARMIMI.APPOINTMENT
-    WHERE DOCTOR_NAME = :doctor
-    AND APPOINTMENT_DATE = :date
-    AND APPOINTMENT_TIME = :time
-    AND STATUS = 'Approved'
-    AND APPOINTMENT_ID <> :id
-    ");
-
-    $check->execute([
-        ':doctor'=>$appointment['DOCTOR_NAME'],
-        ':date'=>$appointment['APPOINTMENT_DATE'],
-        ':time'=>$appointment['APPOINTMENT_TIME'],
-        ':id'=>$id
-    ]);
-
-    $slotTaken = $check->fetchColumn();
-
-    if($slotTaken > 0){
-
-        echo "
-        <script>
-        alert('This slot is already approved for another patient.');
-        window.location='admin_appointment.php';
-        </script>
-        ";
-        exit();
-    }
-
- /* APPROVE */
-
-$stmt = $conn->prepare("
-UPDATE SYARMIMI.APPOINTMENT
-SET STATUS='Approved'
-WHERE APPOINTMENT_ID=:id
-");
-
-$stmt->execute([
-    ':id'=>$id
-]);
-
-/* =========================
-   UPDATE SLOT TO BOOKED
-========================= */
-
-$slotTime = substr(
-    $appointment['APPOINTMENT_TIME'],
-    0,
-    5
-);
-
-$updateSlot = $conn->prepare("
-UPDATE SYARMIMI.DOCTOR_SLOT
-SET
-    STATUS = 'Booked',
-    CURRENT_PATIENT = 1,
-    APPOINTMENT_ID = :appointment
-WHERE ACCOUNT_ID = :doctor
-AND TO_CHAR(SLOT_DATE,'DD-MON-RR') = :date
-AND SLOT_TIME = :time
-");
-
-$updateSlot->execute([
-    ':appointment' => $id,
-    ':doctor'      => $doctorId,
-    ':date'        => $appointment['APPOINTMENT_DATE'],
-    ':time'        => $slotTime
-]);
-
-$notify = $conn->prepare("
-INSERT INTO SYARMIMI.APPOINTMENT_NOTIFICATION
-(
-    NOTIFICATION_ID,
-    ACCOUNT_ID,
-    MESSAGE,
-    IS_READ,
-    CREATED_AT
-)
-VALUES
-(
-    SYARMIMI.NOTIF_SEQ.NEXTVAL,
-    :doctor,
-    :message,
-    0,
-    SYSDATE
-)
-");
-
-$notify->execute([
-':doctor'=>$doctorId,
-':message'=>'New appointment approved for '.$appointment['PATIENT_NAME']
-]);
-
-$emailSent = sendAppointmentApprovalEmail(
-    $appointment['EMAIL'],
-    $appointment['PATIENT_NAME'],
-    $appointment['DOCTOR_NAME'],
-    $appointment['APPOINTMENT_DATE'],
-    $appointment['APPOINTMENT_TIME']
-);
-
-if($emailSent){
-
-    $_SESSION['success'] =
-    "Appointment approved and email sent successfully.";
-
-}else{
-
-    $_SESSION['error'] =
-    "Appointment approved but email failed to send.";
-
-}
-
-header("Location: admin_appointment.php");
-exit();
-
-}
-
-/* =========================
-   REJECT APPOINTMENT
-========================= */
-
-if(isset($_GET['reject'])){
-
-    $id = $_GET['reject'];
-
-    $stmtPatient = $conn->prepare("
-SELECT PATIENT_NAME, EMAIL
-FROM SYARMIMI.APPOINTMENT
-WHERE APPOINTMENT_ID = :id
-");
-
-$stmtPatient->execute([
-    ':id'=>$id
-]);
-
-$patient = $stmtPatient->fetch(PDO::FETCH_ASSOC);
-
-    $sql = "
-    UPDATE SYARMIMI.APPOINTMENT
-    SET STATUS='Rejected'
-    WHERE APPOINTMENT_ID=:id
-    ";
-
-    $stmt = $conn->prepare($sql);
-
-   $stmt->execute([
-    ':id' => $id
-]);
-
-$emailSent = sendAppointmentRejectedEmail(
-    $patient['EMAIL'],
-    $patient['PATIENT_NAME']
-);
-
-if($emailSent){
-
-    $_SESSION['success'] =
-    "Appointment rejected and email sent successfully.";
-
-}else{
-
-    $_SESSION['error'] =
-    "Appointment rejected but email failed to send.";
-
-}
-
-header("Location: admin_appointment.php");
-exit();
-}
-
-/* =========================
-   COUNTS
-========================= */
-
-$pendingCount = $conn->query("
-SELECT COUNT(*) 
-FROM SYARMIMI.APPOINTMENT
-WHERE STATUS='Pending'
+    WHERE UPPER(TRIM(STATUS)) = 'PENDING'
 ")->fetchColumn();
 
-$approvedCount = $conn->query("
-SELECT COUNT(*) 
-FROM SYARMIMI.APPOINTMENT
-WHERE STATUS='Approved'
+
+$approvedCount = (int)$conn->query("
+    SELECT COUNT(*)
+    FROM SYARMIMI.APPOINTMENT
+    WHERE UPPER(TRIM(STATUS)) = 'APPROVED'
 ")->fetchColumn();
 
-$rejectedCount = $conn->query("
-SELECT COUNT(*) 
-FROM SYARMIMI.APPOINTMENT
-WHERE STATUS='Rejected'
+
+$rejectedCount = (int)$conn->query("
+    SELECT COUNT(*)
+    FROM SYARMIMI.APPOINTMENT
+    WHERE UPPER(TRIM(STATUS)) = 'REJECTED'
 ")->fetchColumn();
 
-$doctorAvailability = $conn->query("
-SELECT
-    H.USERNAME,
-    D.STATUS,
-    D.START_TIME,
-    D.END_TIME
-FROM SYARMIMI.DOCTOR_AVAILABILITY D
-JOIN SYARMIMI.HOSPITAL_STAFF H
-ON D.ACCOUNT_ID = H.ACCOUNT_ID
-WHERE D.AVAILABLE_DATE = TRUNC(SYSDATE)
-ORDER BY H.USERNAME
-")->fetchAll(PDO::FETCH_ASSOC);
 
-$scheduleDoctors = $conn->query("
-SELECT
-ACCOUNT_ID,
-USERNAME
-FROM SYARMIMI.HOSPITAL_STAFF
-WHERE LOWER(ROLE)='doctor'
-ORDER BY USERNAME
-")->fetchAll(PDO::FETCH_ASSOC);
+$totalCount = (int)$conn->query("
+    SELECT COUNT(*)
+    FROM SYARMIMI.APPOINTMENT
+")->fetchColumn();
 
-/* =========================
-   FETCH APPOINTMENTS
-========================= */
 
-$sql = "
-SELECT *
-FROM SYARMIMI.APPOINTMENT
-ORDER BY APPOINTMENT_ID DESC
+/* =========================================================
+   TODAY DOCTOR AVAILABILITY
+========================================================= */
+
+$doctorAvailabilitySql = "
+
+    SELECT
+        H.ACCOUNT_ID,
+        H.USERNAME,
+        H.DEPARTMENT,
+        D.STATUS,
+        D.START_TIME,
+        D.END_TIME,
+
+        TO_CHAR(
+            D.AVAILABLE_DATE,
+            'DD-MON-YYYY'
+        ) AS AVAILABLE_DATE
+
+    FROM SYARMIMI.DOCTOR_AVAILABILITY D
+
+    JOIN SYARMIMI.HOSPITAL_STAFF H
+        ON TO_CHAR(D.ACCOUNT_ID)
+        =
+        TO_CHAR(H.ACCOUNT_ID)
+
+    WHERE TRUNC(D.AVAILABLE_DATE)
+          =
+          TRUNC(SYSDATE)
+
+    ORDER BY
+        H.DEPARTMENT,
+        H.USERNAME
 ";
 
-$stmt = $conn->query($sql);
+
+$doctorAvailabilityStmt =
+    $conn->query($doctorAvailabilitySql);
+
+$doctorAvailability =
+    $doctorAvailabilityStmt->fetchAll(PDO::FETCH_ASSOC);
+
+
+/* =========================================================
+   DOCTOR LIST
+========================================================= */
+
+$doctorListSql = "
+
+    SELECT
+        ACCOUNT_ID,
+        USERNAME,
+        DEPARTMENT
+
+    FROM SYARMIMI.HOSPITAL_STAFF
+
+    WHERE UPPER(TRIM(ROLE)) = 'DOCTOR'
+
+    ORDER BY
+        DEPARTMENT,
+        USERNAME
+";
+
+
+$doctorListStmt =
+    $conn->query($doctorListSql);
+
+$scheduleDoctors =
+    $doctorListStmt->fetchAll(PDO::FETCH_ASSOC);
+
+
+/* =========================================================
+   PREPARE DOCTOR SCHEDULE DATA
+========================================================= */
+
+$doctorScheduleData = [];
+
+
+foreach ($scheduleDoctors as $doctor) {
+
+    $doctorId = $doctor['ACCOUNT_ID'];
+
+
+    /* =====================================================
+       UPCOMING AVAILABLE DATES
+    ===================================================== */
+
+    $dateStmt = $conn->prepare("
+
+        SELECT
+
+            TO_CHAR(
+                AVAILABLE_DATE,
+                'DD-MON-YYYY'
+            ) AS AVAILABLE_DATE
+
+        FROM SYARMIMI.DOCTOR_AVAILABILITY
+
+        WHERE TO_CHAR(ACCOUNT_ID)
+              =
+              TO_CHAR(:doctor_id)
+
+        AND TRUNC(AVAILABLE_DATE)
+            >=
+            TRUNC(SYSDATE)
+
+        AND UPPER(TRIM(STATUS))
+            =
+            'AVAILABLE'
+
+        ORDER BY
+            AVAILABLE_DATE
+    ");
+
+
+    $dateStmt->execute([
+        ':doctor_id' => (string)$doctorId
+    ]);
+
+
+    $upcomingDates =
+        $dateStmt->fetchAll(PDO::FETCH_COLUMN);
+
+
+    /* =====================================================
+       AVAILABLE SLOT COUNT
+    ===================================================== */
+
+    $availableStmt = $conn->prepare("
+
+        SELECT COUNT(*)
+
+        FROM SYARMIMI.DOCTOR_SLOT
+
+        WHERE TO_CHAR(ACCOUNT_ID)
+              =
+              TO_CHAR(:doctor_id)
+
+        AND TRUNC(SLOT_DATE)
+            >=
+            TRUNC(SYSDATE)
+
+        AND UPPER(TRIM(STATUS))
+            =
+            'AVAILABLE'
+
+        AND NVL(CURRENT_PATIENT, 0)
+            <
+            NVL(MAX_PATIENT, 1)
+    ");
+
+
+    $availableStmt->execute([
+        ':doctor_id' => (string)$doctorId
+    ]);
+
+
+    $availableSlots =
+        (int)$availableStmt->fetchColumn();
+
+
+    /* =====================================================
+       BOOKED SLOT COUNT
+    ===================================================== */
+
+    $bookedStmt = $conn->prepare("
+
+        SELECT COUNT(*)
+
+        FROM SYARMIMI.DOCTOR_SLOT
+
+        WHERE TO_CHAR(ACCOUNT_ID)
+              =
+              TO_CHAR(:doctor_id)
+
+        AND TRUNC(SLOT_DATE)
+            >=
+            TRUNC(SYSDATE)
+
+        AND
+        (
+            UPPER(TRIM(STATUS)) = 'BOOKED'
+
+            OR
+
+            NVL(CURRENT_PATIENT, 0)
+            >=
+            NVL(MAX_PATIENT, 1)
+        )
+    ");
+
+
+    $bookedStmt->execute([
+        ':doctor_id' => (string)$doctorId
+    ]);
+
+
+    $bookedSlots =
+        (int)$bookedStmt->fetchColumn();
+
+
+    /* =====================================================
+       STORE
+    ===================================================== */
+
+    $doctorScheduleData[] = [
+
+        'ACCOUNT_ID' =>
+            $doctorId,
+
+        'USERNAME' =>
+            $doctor['USERNAME'],
+
+        'DEPARTMENT' =>
+            $doctor['DEPARTMENT'],
+
+        'DATES' =>
+            $upcomingDates,
+
+        'AVAILABLE_SLOTS' =>
+            $availableSlots,
+
+        'BOOKED_SLOTS' =>
+            $bookedSlots
+
+    ];
+}
+
+
+/* =========================================================
+   FETCH APPOINTMENTS
+
+   Highest APPOINTMENT_ID = newest record
+========================================================= */
+
+$appointmentSql = "
+
+    SELECT
+
+        APPOINTMENT_ID,
+        PATIENT_NAME,
+        EMAIL,
+        GENDER,
+        PHONE,
+        DEPARTMENT,
+        DOCTOR_NAME,
+        APPOINTMENT_DATE,
+        APPOINTMENT_TIME,
+        STATUS,
+        ACCOUNT_ID
+
+    FROM SYARMIMI.APPOINTMENT
+
+    ORDER BY
+        APPOINTMENT_ID DESC
+";
+
+
+$appointmentStmt =
+    $conn->query($appointmentSql);
+
+$appointments =
+    $appointmentStmt->fetchAll(PDO::FETCH_ASSOC);
+
+
+/* =========================================================
+   NORMALIZE APPOINTMENT DATE
+========================================================= */
+
+function normalizeAppointmentDate($date)
+{
+    if ($date === null || trim($date) === '') {
+        return '';
+    }
+
+    $date = trim($date);
+
+
+    /* YYYY-MM-DD */
+
+    if (
+        preg_match(
+            '/^\d{4}-\d{2}-\d{2}$/',
+            $date
+        )
+    ) {
+        return $date;
+    }
+
+
+    /* DD-MON-RR */
+
+    if (
+        preg_match(
+            '/^\d{2}-[A-Za-z]{3}-\d{2}$/',
+            $date
+        )
+    ) {
+
+        $object =
+            DateTime::createFromFormat(
+                'd-M-y',
+                strtoupper($date)
+            );
+
+        if ($object) {
+
+            return $object->format('Y-m-d');
+
+        }
+    }
+
+
+    /* DD-MON-YYYY */
+
+    if (
+        preg_match(
+            '/^\d{2}-[A-Za-z]{3}-\d{4}$/',
+            $date
+        )
+    ) {
+
+        $object =
+            DateTime::createFromFormat(
+                'd-M-Y',
+                strtoupper($date)
+            );
+
+        if ($object) {
+
+            return $object->format('Y-m-d');
+
+        }
+    }
+
+
+    $timestamp = strtotime($date);
+
+
+    if ($timestamp !== false) {
+
+        return date(
+            'Y-m-d',
+            $timestamp
+        );
+    }
+
+
+    return '';
+}
+
+
+/* =========================================================
+   DISPLAY APPOINTMENT DATE
+========================================================= */
+
+function displayAppointmentDate($date)
+{
+    $normalized =
+        normalizeAppointmentDate($date);
+
+
+    if ($normalized === '') {
+
+        return $date ?: '-';
+
+    }
+
+
+    $timestamp =
+        strtotime($normalized);
+
+
+    return strtoupper(
+        date(
+            'd-M-y',
+            $timestamp
+        )
+    );
+}
 
 ?>
 
 <!DOCTYPE html>
+
 <html lang="en">
+
 <head>
 
 <meta charset="UTF-8">
 
-<title>Appointment Management</title>
+<meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+>
 
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+<title>
+    Appointment Management
+</title>
 
-<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons/font/bootstrap-icons.css" rel="stylesheet">
-<link rel="stylesheet"
-href="https://cdn.datatables.net/1.13.8/css/dataTables.bootstrap5.min.css">
+
+<!-- BOOTSTRAP -->
+
+<link
+    href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
+    rel="stylesheet"
+>
+
+
+<!-- BOOTSTRAP ICONS -->
+
+<link
+    href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css"
+    rel="stylesheet"
+>
+
+
+<!-- DATATABLES -->
+
+<link
+    href="https://cdn.datatables.net/1.13.8/css/dataTables.bootstrap5.min.css"
+    rel="stylesheet"
+>
+
 
 <style>
 
-body{
-    background:#f1f5f9;
+/* =========================================================
+   GENERAL
+========================================================= */
+
+body {
+
+    background:#f4f6f9;
     font-family:'Segoe UI', sans-serif;
+    color:#1f2937;
+
 }
 
-.page-title{
-    font-size:42px;
-    font-weight:800;
-    color:#0f172a;
+.main-content {
+
+    padding:30px;
+    width:100%;
 }
 
-.stats-card{
-    border-radius:20px;
-    padding:25px;
-    color:white;
-    height:100%;
-    box-shadow:0 8px 20px rgba(0,0,0,0.08);
-}
 
-.pending-bg{
-    background:linear-gradient(135deg,#f59e0b,#facc15);
-}
+/* =========================================================
+   HEADER
+========================================================= */
 
-.approved-bg{
-    background:linear-gradient(135deg,#16a34a,#22c55e);
-}
+.page-title {
 
-.rejected-bg{
-    background:linear-gradient(135deg,#dc2626,#ef4444);
-}
-
-.stats-card h2{
-    font-size:40px;
+    font-size:28px;
     font-weight:700;
+    color:#172033;
+    margin-bottom:4px;
+
 }
 
-.stats-card p{
-    margin:0;
-    font-size:18px;
+.page-subtitle {
+
+    font-size:14px;
+    color:#6b7280;
+
 }
 
-.table-box{
-    background:white;
-    border-radius:25px;
-    padding:25px;
-    box-shadow:0 10px 25px rgba(0,0,0,0.05);
+
+/* =========================================================
+   AUTOMATION BANNER
+========================================================= */
+
+.automation-banner {
+
+    background:#eff6ff;
+    border:1px solid #bfdbfe;
+    border-radius:14px;
+    padding:18px 20px;
+    margin-bottom:24px;
+
 }
 
-.table th{
-    background:#2563eb;
-    color:white;
-    border:none;
-    padding:16px;
-}
+.automation-icon {
 
-.table td{
-    vertical-align:middle;
-    padding:16px;
-}
+    width:45px;
+    height:45px;
 
-.badge-pending{
-    background:#facc15;
-    color:black;
-    padding:10px 18px;
-    border-radius:30px;
-    font-weight:600;
-}
-
-.badge-approved{
-    background:#22c55e;
-    color:white;
-    padding:10px 18px;
-    border-radius:30px;
-    font-weight:600;
-}
-
-.badge-rejected{
-    background:#ef4444;
-    color:white;
-    padding:10px 18px;
-    border-radius:30px;
-    font-weight:600;
-}
-
-.patient-box strong{
-    font-size:16px;
-}
-
-.patient-box small{
-    color:#64748b;
-}
-
-.action-btn{
     border-radius:12px;
-    padding:8px 16px;
-    font-weight:600;
+
+    background:#dbeafe;
+    color:#2563eb;
+
+    display:flex;
+    justify-content:center;
+    align-items:center;
+
+    font-size:21px;
+
+    flex-shrink:0;
+
 }
 
-.table tbody tr:hover{
+
+/* =========================================================
+   STAT CARDS
+========================================================= */
+
+.stat-card {
+
+    background:white;
+
+    border:1px solid #e5e7eb;
+
+    border-radius:15px;
+
+    padding:20px;
+
+    height:100%;
+
+    box-shadow:
+        0 3px 12px
+        rgba(0,0,0,0.04);
+
+}
+
+.stat-label {
+
+    color:#6b7280;
+    font-size:13px;
+    margin-bottom:7px;
+
+}
+
+.stat-number {
+
+    font-size:30px;
+    font-weight:700;
+
+}
+
+.stat-icon {
+
+    width:42px;
+    height:42px;
+
+    border-radius:12px;
+
+    display:flex;
+    justify-content:center;
+    align-items:center;
+
+    font-size:19px;
+
+}
+
+.icon-total {
+
+    background:#f3f4f6;
+    color:#374151;
+
+}
+
+.icon-pending {
+
+    background:#fef3c7;
+    color:#d97706;
+
+}
+
+.icon-approved {
+
+    background:#dcfce7;
+    color:#16a34a;
+
+}
+
+.icon-rejected {
+
+    background:#fee2e2;
+    color:#dc2626;
+
+}
+
+
+/* =========================================================
+   CONTENT BOX
+========================================================= */
+
+.content-box {
+
+    background:#ffffff;
+
+    border:1px solid #e5e7eb;
+
+    border-radius:16px;
+
+    padding:24px;
+
+    margin-bottom:24px;
+
+    box-shadow:
+        0 3px 14px
+        rgba(0,0,0,0.04);
+
+}
+
+
+/* =========================================================
+   TABLE
+========================================================= */
+
+.table {
+
+    vertical-align:middle;
+
+}
+
+.table thead th {
+
+    background:#1f2937;
+    color:white;
+
+    border:none;
+
+    padding:13px 12px;
+
+    font-size:13px;
+
+    white-space:nowrap;
+
+}
+
+.table tbody td {
+
+    padding:14px 12px;
+
+    border-color:#edf0f3;
+
+}
+
+.table tbody tr:hover {
+
     background:#f8fafc;
-    transition:0.2s;
+
 }
 
-.dataTables_filter{
+
+/* =========================================================
+   NO COLUMN
+========================================================= */
+
+.row-number {
+
+    width:45px;
+
+    text-align:center;
+
+    font-weight:600;
+
+    color:#64748b;
+
+}
+
+
+/* =========================================================
+   STATUS
+========================================================= */
+
+.status {
+
+    display:inline-flex;
+
+    align-items:center;
+
+    gap:5px;
+
+    border-radius:20px;
+
+    padding:6px 10px;
+
+    font-size:12px;
+
+    font-weight:600;
+
+    white-space:nowrap;
+
+}
+
+.status-approved {
+
+    color:#166534;
+    background:#dcfce7;
+
+}
+
+.status-rejected {
+
+    color:#991b1b;
+    background:#fee2e2;
+
+}
+
+.status-pending {
+
+    color:#92400e;
+    background:#fef3c7;
+
+}
+
+.status-other {
+
+    color:#374151;
+    background:#f3f4f6;
+
+}
+
+
+/* =========================================================
+   PROCESS
+========================================================= */
+
+.processing {
+
+    font-size:12px;
+
+    font-weight:600;
+
+    white-space:nowrap;
+
+}
+
+.processing.approved {
+
+    color:#15803d;
+
+}
+
+.processing.rejected {
+
+    color:#dc2626;
+
+}
+
+.processing.pending {
+
+    color:#d97706;
+
+}
+
+
+/* =========================================================
+   FORM
+========================================================= */
+
+.form-control,
+.form-select {
+
+    border-radius:10px;
+
+    min-height:44px;
+
+}
+
+
+/* Hide DataTables default search because we have custom search */
+
+.dataTables_filter {
+
     display:none;
+
 }
 
-.dataTables_info{
-    margin-top:15px;
-}
 
-.dataTables_paginate{
-    margin-top:15px;
-}
+/* =========================================================
+   DOCTOR DATE
+========================================================= */
 
-.dataTables_wrapper .dataTables_paginate .paginate_button.current{
-    background:#2563eb !important;
-    color:white !important;
-    border:none !important;
-}
+.date-badge {
 
-.dataTables_wrapper .dataTables_paginate .paginate_button:hover{
-    background:#2563eb !important;
-    color:white !important;
+    display:inline-block;
+
+    padding:5px 8px;
+
+    margin:2px;
+
+    border-radius:7px;
+
+    background:#eff6ff;
+
+    color:#1d4ed8;
+
+    font-size:11px;
+
 }
 
 </style>
 
 </head>
 
+
 <body>
+
 
 <div class="d-flex">
 
+
+<!-- =====================================================
+     SIDEBAR
+===================================================== -->
+
 <?php include("../includes/sidebar_admin.php"); ?>
 
-<div class="flex-grow-1 p-4">
 
-<h2 class="page-title mb-4">
-📅 Appointment Management
-</h2>
+<!-- =====================================================
+     CONTENT
+===================================================== -->
 
-<?php if(isset($_SESSION['success'])): ?>
+<div class="main-content">
 
-<div class="alert alert-success alert-dismissible fade show shadow-sm">
 
-<i class="bi bi-check-circle-fill"></i>
-<?= $_SESSION['success']; ?>
+<!-- =====================================================
+     HEADER
+===================================================== -->
 
-<button
-type="button"
-class="btn-close"
-data-bs-dismiss="alert">
-</button>
+<div class="mb-4">
 
-</div>
+    <div class="page-title">
 
-<?php unset($_SESSION['success']); endif; ?>
+        📅 Appointment Management
 
-<?php if(isset($_SESSION['error'])): ?>
+    </div>
 
-<div class="alert alert-danger alert-dismissible fade show shadow-sm">
+    <div class="page-subtitle">
 
-<i class="bi bi-exclamation-triangle-fill"></i>
-<?= $_SESSION['error']; ?>
+        Monitor automatically processed appointments and doctor availability.
 
-<button
-type="button"
-class="btn-close"
-data-bs-dismiss="alert">
-</button>
+    </div>
 
 </div>
 
-<?php unset($_SESSION['error']); endif; ?>
 
-<!-- =========================
+<!-- =====================================================
+     AUTOMATION BANNER
+===================================================== -->
+
+<div class="automation-banner">
+
+    <div class="d-flex align-items-center gap-3">
+
+        <div class="automation-icon">
+
+            <i class="bi bi-lightning-charge-fill"></i>
+
+        </div>
+
+        <div>
+
+            <div class="fw-bold mb-1">
+
+                Automatic Appointment Processing
+
+            </div>
+
+            <div class="small text-muted">
+
+                Appointment requests are automatically checked
+                against doctor availability and available slot capacity.
+                Admin approval is no longer required.
+
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+
+<!-- =====================================================
      STATISTICS
-========================= -->
+===================================================== -->
 
-<div class="row g-4 mb-4">
+<div class="row g-3 mb-4">
 
-<div class="col-md-4">
 
-<div class="stats-card pending-bg">
+<div class="col-md-3">
 
-<h2><?= $pendingCount ?></h2>
+    <div class="stat-card">
 
-<p>
-Pending Appointments
-</p>
+        <div class="d-flex justify-content-between">
 
-</div>
+            <div>
 
-</div>
+                <div class="stat-label">
+                    Total Appointments
+                </div>
 
-<div class="col-md-4">
+                <div class="stat-number">
+                    <?= $totalCount ?>
+                </div>
 
-<div class="stats-card approved-bg">
+            </div>
 
-<h2><?= $approvedCount ?></h2>
+            <div class="stat-icon icon-total">
 
-<p>
-Approved Appointments
-</p>
+                <i class="bi bi-calendar3"></i>
 
-</div>
+            </div>
 
-</div>
+        </div>
 
-<div class="col-md-4">
-
-<div class="stats-card rejected-bg">
-
-<h2><?= $rejectedCount ?></h2>
-
-<p>
-Rejected Appointments
-</p>
+    </div>
 
 </div>
 
-</div>
+
+<div class="col-md-3">
+
+    <div class="stat-card">
+
+        <div class="d-flex justify-content-between">
+
+            <div>
+
+                <div class="stat-label">
+                    Pending
+                </div>
+
+                <div class="stat-number text-warning">
+                    <?= $pendingCount ?>
+                </div>
+
+            </div>
+
+            <div class="stat-icon icon-pending">
+
+                <i class="bi bi-hourglass-split"></i>
+
+            </div>
+
+        </div>
+
+    </div>
 
 </div>
 
-<div class="table-box mb-4">
 
-<h5 class="mb-3">
-📅 Today's Doctor Availability
-</h5>
+<div class="col-md-3">
+
+    <div class="stat-card">
+
+        <div class="d-flex justify-content-between">
+
+            <div>
+
+                <div class="stat-label">
+                    Approved
+                </div>
+
+                <div class="stat-number text-success">
+                    <?= $approvedCount ?>
+                </div>
+
+            </div>
+
+            <div class="stat-icon icon-approved">
+
+                <i class="bi bi-check-circle"></i>
+
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+
+<div class="col-md-3">
+
+    <div class="stat-card">
+
+        <div class="d-flex justify-content-between">
+
+            <div>
+
+                <div class="stat-label">
+                    Rejected
+                </div>
+
+                <div class="stat-number text-danger">
+                    <?= $rejectedCount ?>
+                </div>
+
+            </div>
+
+            <div class="stat-icon icon-rejected">
+
+                <i class="bi bi-x-circle"></i>
+
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+
+</div>
+
+
+<!-- =====================================================
+     TODAY DOCTOR AVAILABILITY
+===================================================== -->
+
+<div class="content-box">
+
+<div class="mb-3">
+
+    <h5 class="fw-bold mb-1">
+
+        Today's Doctor Availability
+
+    </h5>
+
+    <small class="text-muted">
+
+        Doctors who have availability records for today.
+
+    </small>
+
+</div>
+
 
 <div class="table-responsive">
 
-<table class="table align-middle">
+<table class="table table-hover">
 
 <thead>
 
 <tr>
-<th>Doctor</th>
-<th>Status</th>
-<th>Time Slot</th>
+
+    <th>Doctor</th>
+    <th>Department</th>
+    <th>Status</th>
+    <th>Available Time</th>
+
 </tr>
 
 </thead>
 
+
 <tbody>
 
-<?php foreach($doctorAvailability as $doctor): ?>
+<?php if (count($doctorAvailability) > 0): ?>
+
+<?php foreach ($doctorAvailability as $doctor): ?>
+
+<?php
+
+$status =
+    strtoupper(
+        trim(
+            $doctor['STATUS'] ?? ''
+        )
+    );
+
+?>
 
 <tr>
 
 <td>
-<b>Dr. <?= htmlspecialchars($doctor['USERNAME']) ?></b>
+
+    <strong>
+
+        Dr. <?= htmlspecialchars(
+            $doctor['USERNAME'] ?? ''
+        ) ?>
+
+    </strong>
+
 </td>
+
 
 <td>
 
-<?php if($doctor['STATUS']=="Available"): ?>
+    <?= htmlspecialchars(
+        $doctor['DEPARTMENT'] ?? '-'
+    ) ?>
 
-<span class="badge bg-success">
-Available
-</span>
+</td>
+
+
+<td>
+
+<?php if ($status === 'AVAILABLE'): ?>
+
+    <span class="status status-approved">
+
+        <i class="bi bi-check-circle"></i>
+
+        Available
+
+    </span>
 
 <?php else: ?>
 
-<span class="badge bg-danger">
-Unavailable
-</span>
+    <span class="status status-rejected">
+
+        <i class="bi bi-x-circle"></i>
+
+        <?= htmlspecialchars(
+            $doctor['STATUS'] ?? 'Unavailable'
+        ) ?>
+
+    </span>
 
 <?php endif; ?>
 
 </td>
 
+
 <td>
 
-<?php if($doctor['STATUS']=="Available"): ?>
+<?php if ($status === 'AVAILABLE'): ?>
 
-<?= $doctor['START_TIME'] ?>
--
-<?= $doctor['END_TIME'] ?>
+    <?= htmlspecialchars(
+        $doctor['START_TIME'] ?? '-'
+    ) ?>
+
+    -
+
+    <?= htmlspecialchars(
+        $doctor['END_TIME'] ?? '-'
+    ) ?>
 
 <?php else: ?>
 
--
+    <span class="text-muted">
+        -
+    </span>
+
 <?php endif; ?>
 
 </td>
@@ -578,6 +1196,23 @@ Unavailable
 </tr>
 
 <?php endforeach; ?>
+
+<?php else: ?>
+
+<tr>
+
+<td
+    colspan="4"
+    class="text-center text-muted py-4"
+>
+
+    No doctor availability recorded for today.
+
+</td>
+
+</tr>
+
+<?php endif; ?>
 
 </tbody>
 
@@ -587,149 +1222,189 @@ Unavailable
 
 </div>
 
-<div class="table-box mb-4">
 
-<h5 class="mb-3">
-📅 Doctor Future Schedule Overview
-</h5>
+<!-- =====================================================
+     DOCTOR FUTURE SCHEDULE
+===================================================== -->
+
+<div class="content-box">
+
+<div class="mb-3">
+
+    <h5 class="fw-bold mb-1">
+
+        Doctor Schedule Overview
+
+    </h5>
+
+    <small class="text-muted">
+
+        Upcoming doctor availability and slot status.
+
+    </small>
+
+</div>
+
 
 <div class="table-responsive">
 
-<table class="table align-middle">
+<table class="table table-hover">
 
 <thead>
 
 <tr>
-<th>Doctor</th>
-<th>Upcoming Dates</th>
-<th>Available Slots</th>
-<th>Booked Slots</th>
-<th>Action</th>
+
+    <th>Doctor</th>
+    <th>Department</th>
+    <th>Upcoming Availability</th>
+    <th>Available Slots</th>
+    <th>Booked Slots</th>
+    <th>Action</th>
+
 </tr>
 
 </thead>
 
+
 <tbody>
 
-<?php foreach($scheduleDoctors as $doctor): ?>
+<?php if (count($doctorScheduleData) > 0): ?>
 
-<?php
-
-$dateStmt = $conn->prepare("
-SELECT
-TO_CHAR(
-AVAILABLE_DATE,
-'DD Mon YYYY'
-) AS AVAIL_DATE
-FROM SYARMIMI.DOCTOR_AVAILABILITY
-WHERE ACCOUNT_ID=:doctor
-AND AVAILABLE_DATE >= TRUNC(SYSDATE)
-ORDER BY AVAILABLE_DATE
-");
-
-$dateStmt->execute([
-':doctor'=>$doctor['ACCOUNT_ID']
-]);
-
-$dates =
-$dateStmt->fetchAll(PDO::FETCH_COLUMN);
-
-
-
-$availableStmt = $conn->prepare("
-SELECT COUNT(*)
-FROM SYARMIMI.DOCTOR_SLOT
-WHERE ACCOUNT_ID=:doctor
-AND STATUS='Available'
-");
-
-$availableStmt->execute([
-':doctor'=>$doctor['ACCOUNT_ID']
-]);
-
-$availableCount =
-$availableStmt->fetchColumn();
-
-
-
-$bookedStmt = $conn->prepare("
-SELECT COUNT(*)
-FROM SYARMIMI.DOCTOR_SLOT
-WHERE ACCOUNT_ID=:doctor
-AND STATUS='Booked'
-");
-
-$bookedStmt->execute([
-':doctor'=>$doctor['ACCOUNT_ID']
-]);
-
-$bookedCount =
-$bookedStmt->fetchColumn();
-
-?>
+<?php foreach ($doctorScheduleData as $doctor): ?>
 
 <tr>
 
 <td>
 
-<b>
-Dr. <?= htmlspecialchars($doctor['USERNAME']) ?>
-</b>
+    <strong>
+
+        Dr. <?= htmlspecialchars(
+            $doctor['USERNAME']
+        ) ?>
+
+    </strong>
 
 </td>
 
+
 <td>
+
+    <?= htmlspecialchars(
+        $doctor['DEPARTMENT'] ?? '-'
+    ) ?>
+
+</td>
+
+
+<td>
+
+<?php if (count($doctor['DATES']) > 0): ?>
 
 <?php
 
-foreach(array_slice($dates,0,5) as $d)
-{
-echo "
-<span class='badge bg-info me-1 mb-1'>
-$d
-</span>
-";
-}
+$shownDates =
+    array_slice(
+        $doctor['DATES'],
+        0,
+        4
+    );
 
 ?>
 
+<?php foreach ($shownDates as $date): ?>
+
+    <span class="date-badge">
+
+        <?= htmlspecialchars($date) ?>
+
+    </span>
+
+<?php endforeach; ?>
+
+
+<?php if (count($doctor['DATES']) > 4): ?>
+
+    <small class="text-muted">
+
+        +<?= count($doctor['DATES']) - 4 ?> more
+
+    </small>
+
+<?php endif; ?>
+
+
+<?php else: ?>
+
+    <span class="text-muted">
+
+        No upcoming availability
+
+    </span>
+
+<?php endif; ?>
+
 </td>
+
 
 <td>
 
-<span class="badge bg-success">
+    <span class="badge bg-success">
 
-<?= $availableCount ?>
+        <?= (int)$doctor['AVAILABLE_SLOTS'] ?>
 
-</span>
-
-</td>
-
-<td>
-
-<span class="badge bg-danger">
-
-<?= $bookedCount ?>
-
-</span>
+    </span>
 
 </td>
 
+
 <td>
 
-<a
-href="doctor_slot_view.php?doctor=<?= $doctor['ACCOUNT_ID'] ?>"
-class="btn btn-primary btn-sm">
+    <span class="badge bg-danger">
 
-View Schedule
+        <?= (int)$doctor['BOOKED_SLOTS'] ?>
 
-</a>
+    </span>
+
+</td>
+
+
+<td>
+
+    <a
+        href="doctor_slot_view.php?doctor=<?= urlencode(
+            $doctor['ACCOUNT_ID']
+        ) ?>&from=admin_appointment"
+        class="btn btn-primary btn-sm"
+    >
+
+        <i class="bi bi-calendar3"></i>
+
+        Schedule
+
+    </a>
 
 </td>
 
 </tr>
 
 <?php endforeach; ?>
+
+<?php else: ?>
+
+<tr>
+
+<td
+    colspan="6"
+    class="text-center text-muted py-4"
+>
+
+    No doctors found.
+
+</td>
+
+</tr>
+
+<?php endif; ?>
 
 </tbody>
 
@@ -739,211 +1414,394 @@ View Schedule
 
 </div>
 
-<!-- =========================
-     TABLE
-========================= -->
 
-<div class="table-box">
+<!-- =====================================================
+     APPOINTMENT RECORDS
+===================================================== -->
 
-<div class="row mb-4">
+<div class="content-box">
+
+<div class="mb-3">
+
+    <h5 class="fw-bold mb-1">
+
+        Appointment Records
+
+    </h5>
+
+    <small class="text-muted">
+
+        View appointments processed by the automatic booking system.
+
+    </small>
+
+</div>
+
+
+<!-- FILTERS -->
+
+<div class="row g-2 mb-4">
+
+<div class="col-md-5">
+
+    <input
+        type="text"
+        id="appointmentSearch"
+        class="form-control"
+        placeholder="🔍 Search patient, doctor or department"
+    >
+
+</div>
+
+
+<div class="col-md-3">
+
+    <select
+        id="statusFilter"
+        class="form-select"
+    >
+
+        <option value="">
+            All Status
+        </option>
+
+        <option value="Approved">
+            Approved
+        </option>
+
+        <option value="Rejected">
+            Rejected
+        </option>
+
+        <option value="Pending">
+            Pending
+        </option>
+
+    </select>
+
+</div>
+
 
 <div class="col-md-4">
 
-<input
-type="text"
-id="appointmentSearch"
-class="form-control"
-placeholder="🔍 Search Appointment">
+    <select
+        id="sortFilter"
+        class="form-select"
+    >
 
-</div>
+        <option value="desc">
+            Newest First
+        </option>
 
-<div class="col-md-4">
+        <option value="asc">
+            Oldest First
+        </option>
 
-<select
-id="statusFilter"
-class="form-select">
-
-<option value="">
-All Status
-</option>
-
-<option value="Pending">
-Pending
-</option>
-
-<option value="Approved">
-Approved
-</option>
-
-<option value="Rejected">
-Rejected
-</option>
-
-</select>
-
-</div>
-
-<div class="col-md-4">
-
-<select
-id="sortFilter"
-class="form-select">
-
-<option value="desc">
-Newest First
-</option>
-
-<option value="asc">
-Oldest First
-</option>
-
-</select>
+    </select>
 
 </div>
 
 </div>
+
 
 <div class="table-responsive">
 
 <table
-id="appointmentTable"
-class="table align-middle">
+    id="appointmentTable"
+    class="table table-hover"
+>
 
 <thead>
 
 <tr>
 
-<th>ID</th>
-<th>Patient</th>
-<th>Gender</th>
-<th>Phone</th>
-<th>Department</th>
-<th>Doctor</th>
-<th>Date</th>
-<th>Time</th>
-<th>Status</th>
-<th>Actions</th>
-
+    <th>No.</th>
+    <th>ID</th>
+    <th>Patient</th>
+    <th>Gender</th>
+    <th>Phone</th>
+    <th>Department</th>
+    <th>Doctor</th>
+    <th>Date</th>
+    <th>Time</th>
+    <th>Status</th>
+    <th>Processing</th>
 
 </tr>
 
 </thead>
 
+
 <tbody>
 
-<?php while($row = $stmt->fetch(PDO::FETCH_ASSOC)) { ?>
-
-<tr>
-
-<td>
-<b>#<?= $row['APPOINTMENT_ID'] ?></b>
-</td>
-
-<td class="patient-box">
-
-<strong><?= $row['PATIENT_NAME'] ?></strong><br>
-
-<small><?= $row['EMAIL'] ?></small>
-
-</td>
-
-<td>
-
-<?= $row['GENDER'] ?>
-
-</td>
-
-<td>
-
-<?= $row['PHONE'] ?>
-
-</td>
-
-<td>
-
-<?= $row['DEPARTMENT'] ?>
-
-</td>
-
-
-<td>
-
-<?= $row['DOCTOR_NAME'] ?>
-
-</td>
-
-
-<td>
-
-<?= $row['APPOINTMENT_DATE'] ?>
-
-</td>
-
-<td>
-
-<?= $row['APPOINTMENT_TIME'] ?>
-
-</td>
-
-<td>
+<?php foreach ($appointments as $row): ?>
 
 <?php
 
-$status = $row['STATUS'];
+$status =
+    trim(
+        $row['STATUS'] ?? ''
+    );
 
-if($status == 'Pending'){
 
-    echo "<span class='badge-pending'>Pending</span>";
+$normalizedDate =
+    normalizeAppointmentDate(
+        $row['APPOINTMENT_DATE'] ?? ''
+    );
 
-}
-elseif($status == 'Approved'){
 
-    echo "<span class='badge-approved'>Approved</span>";
-
-}
-else{
-
-    echo "<span class='badge-rejected'>Rejected</span>";
-
-}
+$displayDate =
+    displayAppointmentDate(
+        $row['APPOINTMENT_DATE'] ?? ''
+    );
 
 ?>
 
+<tr>
+
+
+<!-- NUMBER -->
+<td class="row-number">
+
 </td>
+
+
+<!-- APPOINTMENT ID -->
+
+<td
+    data-order="<?= (int)$row['APPOINTMENT_ID'] ?>"
+    data-search="<?= (int)$row['APPOINTMENT_ID'] ?>"
+>
+
+    <strong>
+
+        #<?= (int)$row['APPOINTMENT_ID'] ?>
+
+    </strong>
+
+</td>
+
+
+<!-- PATIENT -->
 
 <td>
 
-<?php if($status == 'Pending'): ?>
+    <div class="fw-semibold">
 
-<a href="?approve=<?= $row['APPOINTMENT_ID'] ?>"
-class="btn btn-success btn-sm action-btn">
+        <?= htmlspecialchars(
+            $row['PATIENT_NAME'] ?? ''
+        ) ?>
 
-<i class="bi bi-check-circle"></i>
-Approve
+    </div>
 
-</a>
+    <small class="text-muted">
 
-<a href="?reject=<?= $row['APPOINTMENT_ID'] ?>"
-class="btn btn-danger btn-sm action-btn">
+        <?= htmlspecialchars(
+            $row['EMAIL'] ?? ''
+        ) ?>
 
-<i class="bi bi-x-circle"></i>
-Reject
+    </small>
 
-</a>
+</td>
+
+
+<!-- GENDER -->
+
+<td>
+
+    <?= htmlspecialchars(
+        $row['GENDER'] ?? '-'
+    ) ?>
+
+</td>
+
+
+<!-- PHONE -->
+
+<td>
+
+    <?= htmlspecialchars(
+        $row['PHONE'] ?? '-'
+    ) ?>
+
+</td>
+
+
+<!-- DEPARTMENT -->
+
+<td>
+
+    <?= htmlspecialchars(
+        $row['DEPARTMENT'] ?? '-'
+    ) ?>
+
+</td>
+
+
+<!-- DOCTOR -->
+
+<td>
+
+<?php if (!empty($row['DOCTOR_NAME'])): ?>
+
+    <strong>
+
+        <?= htmlspecialchars(
+            $row['DOCTOR_NAME']
+        ) ?>
+
+    </strong>
 
 <?php else: ?>
 
-<span class="text-muted fw-semibold">
-Completed
-</span>
+    <span class="text-muted">
+
+        Not Assigned
+
+    </span>
 
 <?php endif; ?>
 
 </td>
 
+
+<!-- DATE -->
+
+<td
+    data-order="<?= htmlspecialchars(
+        $normalizedDate
+    ) ?>"
+>
+
+    <?= htmlspecialchars(
+        $displayDate
+    ) ?>
+
+</td>
+
+
+<!-- TIME -->
+
+<td>
+
+    <?= htmlspecialchars(
+        $row['APPOINTMENT_TIME'] ?? '-'
+    ) ?>
+
+</td>
+
+
+<!-- STATUS -->
+
+<td>
+
+<?php if (
+    strtoupper($status) === 'APPROVED'
+): ?>
+
+    <span class="status status-approved">
+
+        <i class="bi bi-check-circle-fill"></i>
+
+        Approved
+
+    </span>
+
+<?php elseif (
+    strtoupper($status) === 'REJECTED'
+): ?>
+
+    <span class="status status-rejected">
+
+        <i class="bi bi-x-circle-fill"></i>
+
+        Rejected
+
+    </span>
+
+<?php elseif (
+    strtoupper($status) === 'PENDING'
+): ?>
+
+    <span class="status status-pending">
+
+        <i class="bi bi-hourglass-split"></i>
+
+        Pending
+
+    </span>
+
+<?php else: ?>
+
+    <span class="status status-other">
+
+        <?= htmlspecialchars(
+            $status ?: '-'
+        ) ?>
+
+    </span>
+
+<?php endif; ?>
+
+</td>
+
+
+<!-- PROCESSING -->
+
+<td>
+
+<?php if (
+    strtoupper($status) === 'APPROVED'
+): ?>
+
+    <span class="processing approved">
+
+        <i class="bi bi-lightning-charge-fill"></i>
+
+        Auto Approved
+
+    </span>
+
+<?php elseif (
+    strtoupper($status) === 'REJECTED'
+): ?>
+
+    <span class="processing rejected">
+
+        <i class="bi bi-lightning-charge-fill"></i>
+
+        Auto Rejected
+
+    </span>
+
+<?php elseif (
+    strtoupper($status) === 'PENDING'
+): ?>
+
+    <span class="processing pending">
+
+        <i class="bi bi-hourglass"></i>
+
+        Old Pending Record
+
+    </span>
+
+<?php else: ?>
+
+    <span class="text-muted small">
+
+        Completed
+
+    </span>
+
+<?php endif; ?>
+
+</td>
+
+
 </tr>
 
-<?php } ?>
+<?php endforeach; ?>
 
 </tbody>
 
@@ -953,153 +1811,264 @@ Completed
 
 </div>
 
-</div>
-
-</div>
-
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-
-<div
-class="modal fade"
-id="doctorAvailabilityModal">
-
-<div class="modal-dialog modal-lg">
-
-<div class="modal-content">
-
-<div class="modal-header">
-
-<h5 class="modal-title">
-📅 Doctor Availability Today
-</h5>
-
-<button
-type="button"
-class="btn-close"
-data-bs-dismiss="modal">
-</button>
-
-</div>
-
-<div class="modal-body">
-
-<table class="table">
-
-<tr>
-<th>Doctor</th>
-<th>Status</th>
-<th>Time Slot</th>
-</tr>
-
-<?php foreach($doctorAvailability as $doctor): ?>
-
-<tr>
-
-<td>
-Dr. <?= htmlspecialchars($doctor['USERNAME']) ?>
-</td>
-
-<td>
-
-<?php if($doctor['STATUS']=="Available"): ?>
-
-<span class="badge bg-success">
-Available
-</span>
-
-<?php else: ?>
-
-<span class="badge bg-danger">
-Unavailable
-</span>
-
-<?php endif; ?>
-
-</td>
-
-<td>
-
-<?php if($doctor['STATUS']=="Available"): ?>
-
-<?= $doctor['START_TIME'] ?>
--
-<?= $doctor['END_TIME'] ?>
-
-<?php else: ?>
-
--
-
-<?php endif; ?>
-
-</td>
-
-</tr>
-
-<?php endforeach; ?>
-
-</table>
 
 </div>
 
 </div>
 
-</div>
 
-</div>
+<!-- =====================================================
+     JAVASCRIPT
+===================================================== -->
 
-<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+<script
+    src="https://code.jquery.com/jquery-3.7.1.min.js">
+</script>
 
-<script src="https://cdn.datatables.net/1.13.8/js/jquery.dataTables.min.js"></script>
+<script
+    src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js">
+</script>
 
-<script src="https://cdn.datatables.net/1.13.8/js/dataTables.bootstrap5.min.js"></script>
+<script
+    src="https://cdn.datatables.net/1.13.8/js/jquery.dataTables.min.js">
+</script>
+
+<script
+    src="https://cdn.datatables.net/1.13.8/js/dataTables.bootstrap5.min.js">
+</script>
+
 
 <script>
 
-$(document).ready(function(){
+$(document).ready(function () {
 
-    var table = $('#appointmentTable').DataTable({
 
-        pageLength: 10,
+    /* =====================================================
+       DATATABLE
+    ===================================================== */
 
-        order: [[0,'desc']],
+    const table =
+        $('#appointmentTable')
+        .DataTable({
 
-        lengthMenu:[
-            [10,25,50,100],
-            [10,25,50,100]
-        ]
+            pageLength: 10,
 
-    });
+            lengthMenu: [
+                [10,25,50,100],
+                [10,25,50,100]
+            ],
 
-    $('#appointmentSearch').on('keyup', function(){
+            /*
+             * Column:
+             *
+             * 0 = No.
+             * 1 = Appointment ID
+             *
+             * Therefore newest sorting uses column 1.
+             */
+            order: [
+                [1, 'desc']
+            ],
 
-        table.search($(this).val()).draw();
+            columnDefs: [
 
-    });
+                /*
+                 * No column should not be sortable/searchable.
+                 */
+                {
+                    targets: 0,
+                    searchable: false,
+                    orderable: false
+                },
 
-    $('#statusFilter').on('change', function(){
+                /*
+                 * Appointment ID is numeric.
+                 */
+                {
+                    targets: 1,
+                    type: 'num'
+                }
 
-        table.column(8)
-             .search($(this).val())
-             .draw();
+            ],
 
-    });
+            searching: true,
 
-    $('#sortFilter').on('change', function(){
+            ordering: true,
 
-        if($(this).val() == 'asc')
-        {
-            table.order([0,'asc']).draw();
+            info: true,
+
+            paging: true
+
+        });
+
+
+    /* =====================================================
+       AUTOMATIC ROW NUMBER
+
+       Page 1 = 1 - 10
+       Page 2 = 11 - 20
+       Page 3 = 21 - 30
+
+       It also recalculates after searching/filtering.
+    ===================================================== */
+
+    table.on(
+        'order.dt search.dt draw.dt',
+        function () {
+
+            let info =
+                table.page.info();
+
+            table
+                .column(
+                    0,
+                    {
+                        search: 'applied',
+                        order: 'applied',
+                        page: 'current'
+                    }
+                )
+                .nodes()
+                .each(
+                    function (cell, i) {
+
+                        cell.innerHTML =
+                            info.start + i + 1;
+
+                    }
+                );
+
         }
-        else
-        {
-            table.order([0,'desc']).draw();
-        }
+    );
 
-    });
+
+    /*
+     * Run numbering immediately.
+     */
+    table.draw();
+
+
+    /* =====================================================
+       SEARCH
+    ===================================================== */
+
+    $('#appointmentSearch')
+    .on(
+        'input',
+        function () {
+
+            const keyword =
+                $(this)
+                .val()
+                .trim();
+
+            table
+                .search(
+                    keyword,
+                    false,
+                    true
+                )
+                .draw();
+
+        }
+    );
+
+
+    /* =====================================================
+       STATUS FILTER
+
+       Status is now column 9 because No. was added.
+    ===================================================== */
+
+    $('#statusFilter')
+    .on(
+        'change',
+        function () {
+
+            const status =
+                $(this).val();
+
+
+            if (status === '') {
+
+                table
+                    .column(9)
+                    .search('')
+                    .draw();
+
+            } else {
+
+                table
+                    .column(9)
+                    .search(
+                        '^' + status + '$',
+                        true,
+                        false
+                    )
+                    .draw();
+
+            }
+
+        }
+    );
+
+
+    /* =====================================================
+       SORT FILTER
+
+       Column 1 = Appointment ID
+    ===================================================== */
+
+    $('#sortFilter')
+    .on(
+        'change',
+        function () {
+
+            const mode =
+                $(this).val();
+
+
+            if (mode === 'asc') {
+
+                table
+                    .order([
+                        [1, 'asc']
+                    ])
+                    .draw();
+
+            } else {
+
+                table
+                    .order([
+                        [1, 'desc']
+                    ])
+                    .draw();
+
+            }
+
+        }
+    );
+
+
+    /* =====================================================
+       DEFAULT NEWEST FIRST
+    ===================================================== */
+
+    $('#sortFilter').val('desc');
+
+
+    table
+        .order([
+            [1, 'desc']
+        ])
+        .draw();
+
 
 });
 
 </script>
 
+
 </body>
+
 </html>
