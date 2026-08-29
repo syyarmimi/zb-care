@@ -4,7 +4,7 @@ session_start();
 
 if (
     !isset($_SESSION['role']) ||
-    !in_array($_SESSION['role'], ['doctor', 'admin'])
+    !in_array($_SESSION['role'], ['doctor', 'admin'], true)
 ) {
     header("Location: ../auth/login.php");
     exit();
@@ -12,52 +12,100 @@ if (
 
 include("../config/config.php");
 
+date_default_timezone_set('Asia/Kuala_Lumpur');
+
+
 /* =========================================================
    ROLE
 ========================================================= */
 
 $role = $_SESSION['role'];
 
-$doctor_id = $_SESSION['user_id'] ?? 0;
+$doctor_id =
+    (int)(
+        $_SESSION['user_id']
+        ?? 0
+    );
 
 
 /* =========================================================
-   HELPER
-   Convert appointment date into YYYY-MM-DD
+   SAFE OUTPUT
+========================================================= */
+
+function h($value)
+{
+    return htmlspecialchars(
+        (string)($value ?? ''),
+        ENT_QUOTES,
+        'UTF-8'
+    );
+}
+
+
+/* =========================================================
+   CONVERT APPOINTMENT DATE
 ========================================================= */
 
 function convertAppointmentDate($date)
 {
-    $date = trim($date);
+    $date =
+        trim(
+            (string)$date
+        );
 
-    if (empty($date)) {
+    if ($date === '') {
         return '';
     }
 
-    /* DD-MON-RR */
-    if (preg_match('/^\d{2}-[A-Za-z]{3}-\d{2}$/', $date)) {
+    if (
+        preg_match(
+            '/^\d{2}-[A-Za-z]{3}-\d{2}$/',
+            $date
+        )
+    ) {
 
-        $dateObj = DateTime::createFromFormat(
-            'd-M-y',
-            strtoupper($date)
-        );
+        $dateObj =
+            DateTime::createFromFormat(
+                'd-M-y',
+                strtoupper($date)
+            );
 
         if ($dateObj) {
-            return $dateObj->format('Y-m-d');
+
+            return $dateObj
+                ->format('Y-m-d');
         }
     }
 
-    /* YYYY-MM-DD */
-    if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
-
-        $dateObj = DateTime::createFromFormat(
-            'Y-m-d',
+    if (
+        preg_match(
+            '/^\d{4}-\d{2}-\d{2}$/',
             $date
-        );
+        )
+    ) {
+
+        $dateObj =
+            DateTime::createFromFormat(
+                'Y-m-d',
+                $date
+            );
 
         if ($dateObj) {
-            return $dateObj->format('Y-m-d');
+
+            return $dateObj
+                ->format('Y-m-d');
         }
+    }
+
+    $timestamp =
+        strtotime($date);
+
+    if ($timestamp !== false) {
+
+        return date(
+            'Y-m-d',
+            $timestamp
+        );
     }
 
     return '';
@@ -71,46 +119,127 @@ function convertAppointmentDate($date)
 $sql = "
 
     SELECT
+
         A.ADMISSION_ID,
+
         P.PATIENT_ID,
+
         P.NAME,
+
+        P.IC_NUMBER,
+
         W.WARD_NAME,
+
         B.BED_NUMBER,
+
+        HS.USERNAME
+        AS DOCTOR_NAME,
 
         TO_CHAR(
             A.ADMISSION_DATE,
             'DD-MON-YYYY'
-        ) AS ADMISSION_DATE,
+        )
+        AS ADMISSION_DATE,
 
         TO_CHAR(
             A.ADMISSION_DATE,
             'YYYY-MM-DD'
-        ) AS ADMISSION_SORT
+        )
+        AS ADMISSION_SORT,
 
-    FROM SYARMIMI.ADMISSION A
+        TO_CHAR(
+            A.EXPECTED_DISCHARGE_DATE,
+            'DD-MON-YYYY'
+        )
+        AS EXPECTED_DISCHARGE_DATE,
 
-    JOIN SYARMIMI.PATIENT P
-        ON A.PATIENT_ID = P.PATIENT_ID
+        TO_CHAR(
+            A.EXPECTED_DISCHARGE_DATE,
+            'YYYY-MM-DD'
+        )
+        AS EXPECTED_SORT,
 
-    JOIN SYARMIMI.BED B
-        ON A.BED_ID = B.BED_ID
+        CASE
 
-    JOIN SYARMIMI.WARD W
-        ON B.WARD_ID = W.WARD_ID
+            WHEN
+                A.EXPECTED_DISCHARGE_DATE
+                IS NOT NULL
 
-    WHERE A.DISCHARGE_DATE IS NULL
+            THEN
+                GREATEST(
+                    1,
+                    TRUNC(
+                        A.EXPECTED_DISCHARGE_DATE
+                    )
+                    -
+                    TRUNC(
+                        A.ADMISSION_DATE
+                    )
+                    +
+                    1
+                )
+
+            ELSE
+                GREATEST(
+                    1,
+                    TRUNC(SYSDATE)
+                    -
+                    TRUNC(
+                        A.ADMISSION_DATE
+                    )
+                    +
+                    1
+                )
+
+        END
+        AS STAY_DAYS
+
+    FROM
+        SYARMIMI.ADMISSION A
+
+    JOIN
+        SYARMIMI.PATIENT P
+
+        ON
+            A.PATIENT_ID =
+            P.PATIENT_ID
+
+    JOIN
+        SYARMIMI.BED B
+
+        ON
+            A.BED_ID =
+            B.BED_ID
+
+    JOIN
+        SYARMIMI.WARD W
+
+        ON
+            B.WARD_ID =
+            W.WARD_ID
+
+    LEFT JOIN
+        SYARMIMI.HOSPITAL_STAFF HS
+
+        ON
+            A.ACCOUNT_ID =
+            HS.ACCOUNT_ID
+
+    WHERE
+        A.DISCHARGE_DATE
+        IS NULL
+
 ";
 
-
-/*
-    Doctor only sees patients assigned to that doctor.
-    Admin sees all admitted patients.
-*/
 
 if ($role === 'doctor') {
 
     $sql .= "
-        AND A.ACCOUNT_ID = :doctor_id
+
+        AND
+            A.ACCOUNT_ID =
+            :doctor_id
+
     ";
 }
 
@@ -118,150 +247,105 @@ if ($role === 'doctor') {
 $sql .= "
 
     ORDER BY
+
         A.ADMISSION_DATE DESC,
+
         A.ADMISSION_ID DESC
 
 ";
 
 
-$currentPatients = $conn->prepare($sql);
+$currentPatients =
+    $conn->prepare($sql);
 
 
 if ($role === 'doctor') {
 
     $currentPatients->execute([
-        ':doctor_id' => $doctor_id
+        ':doctor_id' =>
+            $doctor_id
     ]);
 
-} else {
+}
+else {
 
     $currentPatients->execute();
 }
 
 
-$currentList = $currentPatients->fetchAll(PDO::FETCH_ASSOC);
+$currentList =
+    $currentPatients
+        ->fetchAll(
+            PDO::FETCH_ASSOC
+        );
 
 
 /* =========================================================
    2. WALK-IN PATIENTS
 ========================================================= */
 
-$walkinPatients = $conn->query("
-
-    SELECT
-        W.CONSULTATION_ID,
-        P.PATIENT_ID,
-        P.NAME,
-
-        TO_CHAR(
-            W.CONSULTATION_DATE,
-            'DD-MON-YYYY'
-        ) AS CONSULTATION_DATE,
-
-        TO_CHAR(
-            W.CONSULTATION_DATE,
-            'YYYY-MM-DD'
-        ) AS CONSULTATION_SORT
-
-    FROM SYARMIMI.WALKIN_CONSULTATION W
-
-    JOIN SYARMIMI.PATIENT P
-        ON W.PATIENT_ID = P.PATIENT_ID
-
-    ORDER BY
-        W.CONSULTATION_DATE DESC,
-        W.CONSULTATION_ID DESC
-
-")->fetchAll(PDO::FETCH_ASSOC);
-
-
-/* =========================================================
-   3. APPOINTMENT PATIENTS
-========================================================= */
-
-$appointmentPatients = $conn->query("
-
-    SELECT
-        A.APPOINTMENT_ID,
-        P.PATIENT_ID,
-        P.NAME,
-        A.APPOINTMENT_DATE,
-        A.DEPARTMENT,
-        A.STATUS
-
-    FROM SYARMIMI.APPOINTMENT A
-
-    JOIN SYARMIMI.PATIENT P
-        ON A.PATIENT_ID = P.PATIENT_ID
-
-    ORDER BY
-
-        CASE
-
-            WHEN REGEXP_LIKE(
-                A.APPOINTMENT_DATE,
-                '^[0-9]{2}-[A-Za-z]{3}-[0-9]{2}$'
-            )
-
-            THEN TO_DATE(
-                UPPER(A.APPOINTMENT_DATE),
-                'DD-MON-RR'
-            )
-
-            WHEN REGEXP_LIKE(
-                A.APPOINTMENT_DATE,
-                '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
-            )
-
-            THEN TO_DATE(
-                A.APPOINTMENT_DATE,
-                'YYYY-MM-DD'
-            )
-
-            ELSE NULL
-
-        END DESC,
-
-        A.APPOINTMENT_ID DESC
-
-")->fetchAll(PDO::FETCH_ASSOC);
-
-
-/* =========================================================
-   4. DIAGNOSED PATIENTS
-========================================================= */
-
 $sql = "
 
     SELECT
-        D.DIAGNOSIS_ID,
+
+        W.CONSULTATION_ID,
+
         P.PATIENT_ID,
+
         P.NAME,
-        D.DIAGNOSIS_DETAILS,
+
+        P.IC_NUMBER,
+
+        W.DEPARTMENT,
+
+        W.STATUS,
+
+        HS.USERNAME
+        AS DOCTOR_NAME,
 
         TO_CHAR(
-            D.DATE_RECORDED,
+            W.CONSULTATION_DATE,
             'DD-MON-YYYY'
-        ) AS DATE_RECORDED,
+        )
+        AS CONSULTATION_DATE,
 
         TO_CHAR(
-            D.DATE_RECORDED,
+            W.CONSULTATION_DATE,
             'YYYY-MM-DD'
-        ) AS DATE_SORT
+        )
+        AS CONSULTATION_SORT
 
-    FROM SYARMIMI.DIAGNOSIS D
+    FROM
+        SYARMIMI.WALKIN_CONSULTATION W
 
-    JOIN SYARMIMI.PATIENT P
-        ON D.PATIENT_ID = P.PATIENT_ID
+    JOIN
+        SYARMIMI.PATIENT P
 
-    WHERE 1 = 1
+        ON
+            W.PATIENT_ID =
+            P.PATIENT_ID
+
+    LEFT JOIN
+        SYARMIMI.HOSPITAL_STAFF HS
+
+        ON
+            W.ACCOUNT_ID =
+            HS.ACCOUNT_ID
+
+    WHERE
+        1 = 1
+
 ";
 
 
 if ($role === 'doctor') {
 
     $sql .= "
-        AND D.ACCOUNT_ID = :doctor_id
+
+        AND
+            W.ACCOUNT_ID =
+            :doctor_id
+
     ";
 }
 
@@ -269,28 +353,277 @@ if ($role === 'doctor') {
 $sql .= "
 
     ORDER BY
+
+        W.CONSULTATION_DATE DESC,
+
+        W.CONSULTATION_ID DESC
+
+";
+
+
+$walkinStmt =
+    $conn->prepare($sql);
+
+
+if ($role === 'doctor') {
+
+    $walkinStmt->execute([
+        ':doctor_id' =>
+            $doctor_id
+    ]);
+
+}
+else {
+
+    $walkinStmt->execute();
+}
+
+
+$walkinPatients =
+    $walkinStmt
+        ->fetchAll(
+            PDO::FETCH_ASSOC
+        );
+
+
+/* =========================================================
+   3. APPOINTMENT PATIENTS
+========================================================= */
+
+$sql = "
+
+    SELECT
+
+        A.APPOINTMENT_ID,
+
+        A.PATIENT_ID,
+
+        NVL(
+            P.NAME,
+            A.PATIENT_NAME
+        )
+        AS NAME,
+
+        A.APPOINTMENT_DATE,
+
+        A.APPOINTMENT_TIME,
+
+        A.DEPARTMENT,
+
+        A.STATUS,
+
+        A.PHONE,
+
+        A.IC_NUMBER,
+
+        A.GENDER,
+
+        A.DOCTOR_NAME
+
+    FROM
+        SYARMIMI.APPOINTMENT A
+
+    LEFT JOIN
+        SYARMIMI.PATIENT P
+
+        ON
+            A.PATIENT_ID =
+            P.PATIENT_ID
+
+    WHERE
+        1 = 1
+
+";
+
+
+if ($role === 'doctor') {
+
+    $sql .= "
+
+        AND
+            A.ACCOUNT_ID =
+            :doctor_id
+
+    ";
+}
+
+
+$sql .= "
+
+    ORDER BY
+        A.APPOINTMENT_ID DESC
+
+";
+
+
+$appointmentStmt =
+    $conn->prepare($sql);
+
+
+if ($role === 'doctor') {
+
+    $appointmentStmt->execute([
+        ':doctor_id' =>
+            $doctor_id
+    ]);
+
+}
+else {
+
+    $appointmentStmt->execute();
+}
+
+
+$appointmentPatients =
+    $appointmentStmt
+        ->fetchAll(
+            PDO::FETCH_ASSOC
+        );
+
+
+/* =========================================================
+   4. DIAGNOSIS / CLINICAL REVIEW HISTORY
+========================================================= */
+
+$sql = "
+
+    SELECT
+
+        D.DIAGNOSIS_ID,
+
+        P.PATIENT_ID,
+
+        P.NAME,
+
+        D.ADMISSION_ID,
+
+        D.APPOINTMENT_ID,
+
+        D.CONSULTATION_ID,
+
+        D.DIAGNOSIS_DETAILS,
+
+        D.ALLERGIES,
+
+        HS.USERNAME
+        AS DOCTOR_NAME,
+
+        CASE
+
+            WHEN
+                D.ADMISSION_ID
+                IS NOT NULL
+
+            THEN
+                'Admission Review'
+
+            WHEN
+                D.APPOINTMENT_ID
+                IS NOT NULL
+
+            THEN
+                'Appointment'
+
+            WHEN
+                D.CONSULTATION_ID
+                IS NOT NULL
+
+            THEN
+                'Walk-In'
+
+            ELSE
+                'Diagnosis'
+
+        END
+        AS DIAGNOSIS_TYPE,
+
+        TO_CHAR(
+            D.DATE_RECORDED,
+            'DD-MON-YYYY'
+        )
+        AS DATE_RECORDED,
+
+        TO_CHAR(
+            D.DATE_RECORDED,
+            'HH24:MI'
+        )
+        AS TIME_RECORDED,
+
+        TO_CHAR(
+            D.DATE_RECORDED,
+            'YYYY-MM-DD'
+        )
+        AS DATE_SORT
+
+    FROM
+        SYARMIMI.DIAGNOSIS D
+
+    JOIN
+        SYARMIMI.PATIENT P
+
+        ON
+            D.PATIENT_ID =
+            P.PATIENT_ID
+
+    LEFT JOIN
+        SYARMIMI.HOSPITAL_STAFF HS
+
+        ON
+            D.ACCOUNT_ID =
+            HS.ACCOUNT_ID
+
+    WHERE
+        1 = 1
+
+";
+
+
+if ($role === 'doctor') {
+
+    $sql .= "
+
+        AND
+            D.ACCOUNT_ID =
+            :doctor_id
+
+    ";
+}
+
+
+$sql .= "
+
+    ORDER BY
+
         D.DATE_RECORDED DESC,
+
         D.DIAGNOSIS_ID DESC
 
 ";
 
 
-$diagnosedPatients = $conn->prepare($sql);
+$diagnosedPatients =
+    $conn->prepare($sql);
 
 
 if ($role === 'doctor') {
 
     $diagnosedPatients->execute([
-        ':doctor_id' => $doctor_id
+        ':doctor_id' =>
+            $doctor_id
     ]);
 
-} else {
+}
+else {
 
     $diagnosedPatients->execute();
 }
 
 
-$diagnosedList = $diagnosedPatients->fetchAll(PDO::FETCH_ASSOC);
+$diagnosedList =
+    $diagnosedPatients
+        ->fetchAll(
+            PDO::FETCH_ASSOC
+        );
 
 
 /* =========================================================
@@ -300,43 +633,128 @@ $diagnosedList = $diagnosedPatients->fetchAll(PDO::FETCH_ASSOC);
 $sql = "
 
     SELECT
+
         A.ADMISSION_ID,
+
         P.PATIENT_ID,
+
         P.NAME,
 
+        P.IC_NUMBER,
+
+        W.WARD_NAME,
+
+        B.BED_NUMBER,
+
+        HS.USERNAME
+        AS DOCTOR_NAME,
+
         TO_CHAR(
             A.ADMISSION_DATE,
             'DD-MON-YYYY'
-        ) AS ADMISSION_DATE,
+        )
+        AS ADMISSION_DATE,
 
         TO_CHAR(
             A.ADMISSION_DATE,
             'YYYY-MM-DD'
-        ) AS ADMISSION_SORT,
+        )
+        AS ADMISSION_SORT,
+
+        TO_CHAR(
+            A.EXPECTED_DISCHARGE_DATE,
+            'DD-MON-YYYY'
+        )
+        AS EXPECTED_DISCHARGE_DATE,
+
+        TO_CHAR(
+            A.EXPECTED_DISCHARGE_DATE,
+            'YYYY-MM-DD'
+        )
+        AS EXPECTED_SORT,
 
         TO_CHAR(
             A.DISCHARGE_DATE,
             'DD-MON-YYYY'
-        ) AS DISCHARGE_DATE,
+        )
+        AS DISCHARGE_DATE,
 
         TO_CHAR(
             A.DISCHARGE_DATE,
             'YYYY-MM-DD'
-        ) AS DISCHARGE_SORT
+        )
+        AS DISCHARGE_SORT,
 
-    FROM SYARMIMI.ADMISSION A
+        CASE
 
-    JOIN SYARMIMI.PATIENT P
-        ON A.PATIENT_ID = P.PATIENT_ID
+            WHEN
+                A.EXPECTED_DISCHARGE_DATE
+                IS NOT NULL
 
-    WHERE A.DISCHARGE_DATE IS NOT NULL
+            AND
+                TRUNC(
+                    A.DISCHARGE_DATE
+                )
+                <
+                TRUNC(
+                    A.EXPECTED_DISCHARGE_DATE
+                )
+
+            THEN
+                'Early'
+
+            ELSE
+                'Normal'
+
+        END
+        AS DISCHARGE_TYPE
+
+    FROM
+        SYARMIMI.ADMISSION A
+
+    JOIN
+        SYARMIMI.PATIENT P
+
+        ON
+            A.PATIENT_ID =
+            P.PATIENT_ID
+
+    LEFT JOIN
+        SYARMIMI.BED B
+
+        ON
+            A.BED_ID =
+            B.BED_ID
+
+    LEFT JOIN
+        SYARMIMI.WARD W
+
+        ON
+            B.WARD_ID =
+            W.WARD_ID
+
+    LEFT JOIN
+        SYARMIMI.HOSPITAL_STAFF HS
+
+        ON
+            A.ACCOUNT_ID =
+            HS.ACCOUNT_ID
+
+    WHERE
+        A.DISCHARGE_DATE
+        IS NOT NULL
+
 ";
 
 
 if ($role === 'doctor') {
 
     $sql .= "
-        AND A.ACCOUNT_ID = :doctor_id
+
+        AND
+            A.ACCOUNT_ID =
+            :doctor_id
+
     ";
 }
 
@@ -344,37 +762,57 @@ if ($role === 'doctor') {
 $sql .= "
 
     ORDER BY
+
         A.DISCHARGE_DATE DESC,
+
         A.ADMISSION_ID DESC
 
 ";
 
 
-$dischargedPatients = $conn->prepare($sql);
+$dischargedPatients =
+    $conn->prepare($sql);
 
 
 if ($role === 'doctor') {
 
     $dischargedPatients->execute([
-        ':doctor_id' => $doctor_id
+        ':doctor_id' =>
+            $doctor_id
     ]);
 
-} else {
+}
+else {
 
     $dischargedPatients->execute();
 }
 
 
-$dischargedList = $dischargedPatients->fetchAll(PDO::FETCH_ASSOC);
+$dischargedList =
+    $dischargedPatients
+        ->fetchAll(
+            PDO::FETCH_ASSOC
+        );
 
 
 /* =========================================================
    6. STATISTICS
 ========================================================= */
 
-$totalCurrent    = count($currentList);
-$totalDiagnosed  = count($diagnosedList);
-$totalDischarged = count($dischargedList);
+$totalCurrent =
+    count($currentList);
+
+$totalDiagnosed =
+    count($diagnosedList);
+
+$totalDischarged =
+    count($dischargedList);
+
+$totalAppointments =
+    count($appointmentPatients);
+
+$totalWalkin =
+    count($walkinPatients);
 
 
 /* =========================================================
@@ -383,1624 +821,1834 @@ $totalDischarged = count($dischargedList);
 
 if ($role === 'doctor') {
 
-    $medStmt = $conn->prepare("
+    $medStmt =
+        $conn->prepare("
 
-        SELECT COUNT(*)
+            SELECT
+                COUNT(*)
 
-        FROM SYARMIMI.MEDICATION_ORDER
+            FROM
+                SYARMIMI.MEDICATION_ORDER
 
-        WHERE ACCOUNT_ID = :doctor_id
+            WHERE
+                ACCOUNT_ID =
+                :doctor_id
 
-    ");
+        ");
 
     $medStmt->execute([
-        ':doctor_id' => $doctor_id
+        ':doctor_id' =>
+            $doctor_id
     ]);
 
-} else {
+}
+else {
 
-    $medStmt = $conn->prepare("
+    $medStmt =
+        $conn->prepare("
 
-        SELECT COUNT(*)
+            SELECT
+                COUNT(*)
 
-        FROM SYARMIMI.MEDICATION_ORDER
+            FROM
+                SYARMIMI.MEDICATION_ORDER
 
-    ");
+        ");
 
     $medStmt->execute();
 }
 
 
-$totalMedication = $medStmt->fetchColumn();
+$totalMedication =
+    (int)$medStmt
+        ->fetchColumn();
+
+
+/* =========================================================
+   8. DISCHARGE MEDICATION COUNT
+========================================================= */
+
+if ($role === 'doctor') {
+
+    $dischargeMedStmt =
+        $conn->prepare("
+
+            SELECT
+                COUNT(*)
+
+            FROM
+                SYARMIMI.MEDICATION_ORDER
+
+            WHERE
+                UPPER(
+                    TRIM(
+                        NVL(
+                            ORDER_TYPE,
+                            'UNKNOWN'
+                        )
+                    )
+                )
+                =
+                'DISCHARGE'
+
+            AND
+                ACCOUNT_ID =
+                :doctor_id
+
+        ");
+
+    $dischargeMedStmt->execute([
+        ':doctor_id' =>
+            $doctor_id
+    ]);
+
+}
+else {
+
+    $dischargeMedStmt =
+        $conn->query("
+
+            SELECT
+                COUNT(*)
+
+            FROM
+                SYARMIMI.MEDICATION_ORDER
+
+            WHERE
+                UPPER(
+                    TRIM(
+                        NVL(
+                            ORDER_TYPE,
+                            'UNKNOWN'
+                        )
+                    )
+                )
+                =
+                'DISCHARGE'
+
+        ");
+}
+
+
+$totalDischargeMedication =
+    (int)$dischargeMedStmt
+        ->fetchColumn();
 
 ?>
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
 
 <head>
 
-    <meta charset="UTF-8">
-
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-    <title>Patient Management</title>
-
-
-    <!-- Bootstrap -->
-
-    <link
-        href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
-        rel="stylesheet"
-    >
-
-
-    <!-- Bootstrap Icons -->
-
-    <link
-        href="https://cdn.jsdelivr.net/npm/bootstrap-icons/font/bootstrap-icons.css"
-        rel="stylesheet"
-    >
-
-
-    <!-- DataTables -->
-
-    <link
-        rel="stylesheet"
-        href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css"
-    >
-
-
-    <style>
-
-        body {
-
-            background: #eef2f7;
-
-            font-family: 'Segoe UI', sans-serif;
-
-        }
-
-
-        .content {
-
-            flex: 1;
-
-            padding: 30px;
-
-            min-height: 100vh;
-
-        }
-
-
-        /* =====================================================
-           PAGE TITLE
-        ===================================================== */
-
-        .page-title {
-
-            font-size: 28px;
-
-            font-weight: 700;
-
-            color: #1f2937;
-
-            margin-bottom: 25px;
-
-        }
-
-
-        /* =====================================================
-           CARD
-        ===================================================== */
-
-        .card-box {
-
-            background: white;
-
-            border-radius: 15px;
-
-            padding: 20px;
-
-            box-shadow: 0 5px 15px rgba(0,0,0,0.05);
-
-        }
-
-
-        /* =====================================================
-           STATISTICS
-        ===================================================== */
-
-        .stats-card {
-
-            text-align: center;
-
-            background: white;
-
-            padding: 20px;
-
-            border-radius: 15px;
-
-            box-shadow: 0 5px 15px rgba(0,0,0,0.05);
-
-        }
-
-
-        .stats-card h2 {
-
-            font-weight: bold;
-
-            color: #1f2937;
-
-        }
-
-
-        .stats-card h6 {
-
-            color: #64748b;
-
-            font-weight: 600;
-
-        }
-
-
-        /* =====================================================
-           FORM
-        ===================================================== */
-
-        #searchBox {
-
-            height: 45px;
-
-            border-radius: 10px;
-
-        }
-
-
-        .form-select,
-        .form-control {
-
-            height: 45px;
-
-            border-radius: 10px;
-
-        }
-
-
-        .date-filter-box {
-
-            background: #f8fafc;
-
-            border: 1px solid #e5e7eb;
-
-            border-radius: 12px;
-
-            padding: 15px;
-
-            margin-bottom: 15px;
-
-        }
-
-
-        .date-filter-label {
-
-            font-size: 13px;
-
-            font-weight: 600;
-
-            color: #475569;
-
-            margin-bottom: 6px;
-
-        }
-
-
-        .date-filter-title {
-
-            font-weight: 700;
-
-            color: #334155;
-
-            margin-bottom: 10px;
-
-        }
-
-
-        .btn-date {
-
-            height: 45px;
-
-            border-radius: 10px;
-
-        }
-
-
-        /* =====================================================
-           TABLE
-        ===================================================== */
-
-        .table th {
-
-            background: #f8fafc;
-
-            color: #334155;
-
-            font-weight: 600;
-
-        }
-
-
-        .action-buttons {
-
-            white-space: nowrap;
-
-        }
-
-
-        .btn-view {
-
-            min-width: 75px;
-
-        }
-
-
-        .btn-discharge {
-
-            min-width: 100px;
-
-        }
-
-
-        .dataTables_filter {
-
-            display: none;
-
-        }
-
-
-        /* =====================================================
-           CUSTOM DISCHARGE MODAL
-        ===================================================== */
-
-        .custom-modal-overlay {
-
-            display: none;
-
-            position: fixed;
-
-            z-index: 99999;
-
-            top: 0;
-
-            left: 0;
-
-            width: 100%;
-
-            height: 100%;
-
-            background: rgba(0, 0, 0, 0.45);
-
-            align-items: center;
-
-            justify-content: center;
-
-            padding: 20px;
-
-        }
-
-
-        .custom-modal-overlay.show {
-
-            display: flex;
-
-        }
-
-
-        .custom-modal {
-
-            width: 100%;
-
-            max-width: 450px;
-
-            background: #ffffff;
-
-            border-radius: 8px;
-
-            padding: 32px 30px 28px;
-
-            text-align: center;
-
-            box-shadow: 0 10px 35px rgba(0,0,0,0.20);
-
-            animation: modalFadeIn 0.25s ease;
-
-        }
-
-
-        @keyframes modalFadeIn {
-
-            from {
-
-                opacity: 0;
-
-                transform: scale(0.92);
-
-            }
-
-            to {
-
-                opacity: 1;
-
-                transform: scale(1);
-
-            }
-
-        }
-
-
-        .modal-icon {
-
-            width: 76px;
-
-            height: 76px;
-
-            border-radius: 50%;
-
-            margin: 0 auto 20px;
-
-            display: flex;
-
-            align-items: center;
-
-            justify-content: center;
-
-            font-size: 38px;
-
-        }
-
-
-        .modal-icon.warning {
-
-            background: #fff7e6;
-
-            color: #f0ad00;
-
-            border: 3px solid #ffe1a3;
-
-        }
-
-
-        .custom-modal h3 {
-
-            font-size: 27px;
-
-            font-weight: 600;
-
-            color: #3c4652;
-
-            margin-bottom: 12px;
-
-        }
-
-
-        .custom-modal p {
-
-            font-size: 16px;
-
-            color: #64748b;
-
-            margin-bottom: 25px;
-
-            line-height: 1.5;
-
-        }
-
-
-        .modal-buttons {
-
-            display: flex;
-
-            justify-content: center;
-
-            gap: 12px;
-
-        }
-
-
-        .modal-buttons button {
-
-            min-width: 100px;
-
-            padding: 10px 22px;
-
-            border-radius: 5px;
-
-            font-size: 15px;
-
-            border: none;
-
-            cursor: pointer;
-
-            transition: 0.2s;
-
-        }
-
-
-        .btn-modal-cancel {
-
-            background: #e9ecef;
-
-            color: #495057;
-
-        }
-
-
-        .btn-modal-cancel:hover {
-
-            background: #d9dde1;
-
-        }
-
-
-        .btn-modal-confirm {
-
-            background: #198754;
-
-            color: white;
-
-        }
-
-
-        .btn-modal-confirm:hover {
-
-            background: #157347;
-
-        }
-
-
-        .btn-modal-confirm i {
-
-            margin-right: 5px;
-
-        }
-
-
-        /* =====================================================
-           NO DATE MESSAGE
-        ===================================================== */
-
-        .date-active-message {
-
-            display: none;
-
-            margin-top: 10px;
-
-            color: #475569;
-
-            font-size: 14px;
-
-        }
-
-
-        .date-active-message.show {
-
-            display: block;
-
-        }
-
-
-    </style>
+<meta charset="UTF-8">
+
+<meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+>
+
+<title>
+Patient Management
+</title>
+
+
+<link
+    href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
+    rel="stylesheet"
+>
+
+
+<link
+    href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"
+    rel="stylesheet"
+>
+
+
+<link
+    rel="stylesheet"
+    href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css"
+>
+
+
+<style>
+
+*{
+    box-sizing:border-box;
+}
+
+body{
+    margin:0;
+    background:#f5f7fa;
+    color:#1f2937;
+    font-family:'Segoe UI',Arial,sans-serif;
+}
+
+.content{
+    flex:1;
+    min-width:0;
+    min-height:100vh;
+    padding:28px;
+}
+
+.page-header{
+    margin-bottom:24px;
+}
+
+.page-title{
+    margin:0;
+    color:#111827;
+    font-size:28px;
+    font-weight:750;
+}
+
+.page-subtitle{
+    margin-top:5px;
+    color:#8a94a3;
+    font-size:13px;
+}
+
+
+/* =========================================================
+   STATS
+========================================================= */
+
+.stats-card{
+    height:100%;
+    padding:18px;
+    background:#fff;
+    border:1px solid #e7eaee;
+    border-radius:12px;
+    transition:.2s;
+}
+
+.stats-card:hover{
+    transform:translateY(-2px);
+    border-color:#d6dce3;
+}
+
+.stat-content{
+    display:flex;
+    justify-content:space-between;
+    align-items:flex-start;
+    gap:15px;
+}
+
+.stat-label{
+    color:#8a94a3;
+    font-size:12px;
+    font-weight:600;
+}
+
+.stat-number{
+    margin-top:5px;
+    color:#111827;
+    font-size:30px;
+    line-height:1;
+    font-weight:700;
+}
+
+.stat-subtitle{
+    margin-top:7px;
+    color:#94a3b8;
+    font-size:10px;
+}
+
+.stat-icon{
+    width:42px;
+    height:42px;
+    min-width:42px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    border-radius:10px;
+    font-size:18px;
+}
+
+.icon-admitted{
+    background:#eff6ff;
+    color:#2563eb;
+}
+
+.icon-diagnosed{
+    background:#ecfdf5;
+    color:#15803d;
+}
+
+.icon-medication{
+    background:#fff7ed;
+    color:#ea580c;
+}
+
+.icon-discharged{
+    background:#f3f4f6;
+    color:#475569;
+}
+
+.icon-discharge-med{
+    background:#f5f3ff;
+    color:#7c3aed;
+}
+
+
+/* =========================================================
+   FILTER
+========================================================= */
+
+.filter-card{
+    margin-bottom:18px;
+    padding:18px;
+    background:#fff;
+    border:1px solid #e7eaee;
+    border-radius:12px;
+}
+
+.filter-title{
+    margin-bottom:13px;
+    color:#374151;
+    font-size:13px;
+    font-weight:650;
+}
+
+.filter-label{
+    margin-bottom:6px;
+    color:#64748b;
+    font-size:11px;
+    font-weight:600;
+}
+
+.form-control,
+.form-select{
+    min-height:43px;
+    border:1px solid #dfe3e8;
+    border-radius:8px;
+    color:#374151;
+    font-size:13px;
+}
+
+.form-control:focus,
+.form-select:focus{
+    border-color:#93c5fd;
+    box-shadow:0 0 0 3px rgba(59,130,246,.07);
+}
+
+.search-wrapper{
+    position:relative;
+}
+
+.search-wrapper i{
+    position:absolute;
+    top:50%;
+    left:14px;
+    z-index:2;
+    color:#94a3b8;
+    font-size:13px;
+    transform:translateY(-50%);
+}
+
+.search-wrapper input{
+    padding-left:38px;
+}
+
+
+/* =========================================================
+   DATE
+========================================================= */
+
+.date-filter-box{
+    margin-top:16px;
+    padding:15px;
+    background:#f8fafc;
+    border:1px solid #e8ebef;
+    border-radius:10px;
+}
+
+.date-filter-header{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    margin-bottom:12px;
+    color:#475569;
+    font-size:12px;
+    font-weight:650;
+}
+
+.date-filter-header i{
+    color:#2563eb;
+}
+
+.btn-date{
+    min-height:43px;
+    border-radius:8px;
+    font-size:12px;
+    font-weight:600;
+}
+
+.btn-download{
+    background:#16a34a;
+    border-color:#16a34a;
+    color:#fff;
+}
+
+.btn-download:hover{
+    background:#15803d;
+    border-color:#15803d;
+    color:#fff;
+}
+
+.date-active-message{
+    display:none;
+    margin-top:12px;
+    padding:10px 12px;
+    background:#eff6ff;
+    border-radius:7px;
+    color:#2563eb;
+    font-size:11px;
+}
+
+.date-active-message.show{
+    display:block;
+}
+
+
+/* =========================================================
+   TABLE CARD
+========================================================= */
+
+.table-card{
+    padding:20px;
+    background:#fff;
+    border:1px solid #e7eaee;
+    border-radius:12px;
+}
+
+.table-card-header{
+    margin-bottom:15px;
+}
+
+.table-card-title{
+    margin:0;
+    color:#1f2937;
+    font-size:16px;
+    font-weight:650;
+}
+
+.table-card-subtitle{
+    margin-top:3px;
+    color:#94a3b8;
+    font-size:11px;
+}
+
+
+/* =========================================================
+   TABS
+========================================================= */
+
+.patient-tabs{
+    display:flex;
+    gap:5px;
+    margin-bottom:18px !important;
+    padding:5px;
+    background:#f8fafc;
+    border:1px solid #e7eaee !important;
+    border-radius:10px;
+}
+
+.patient-tabs .nav-item{
+    flex:1;
+}
+
+.patient-tabs .nav-link{
+    width:100%;
+    padding:9px 10px;
+    border:0 !important;
+    border-radius:7px !important;
+    color:#64748b;
+    font-size:11px;
+    font-weight:600;
+    white-space:nowrap;
+}
+
+.patient-tabs .nav-link.active{
+    background:#fff;
+    color:#2563eb;
+    box-shadow:0 1px 4px rgba(15,23,42,.08);
+}
+
+
+/* =========================================================
+   TABLE
+========================================================= */
+
+.table-responsive{
+    overflow-x:auto;
+    border:1px solid #edf0f3;
+    border-radius:9px;
+}
+
+.table{
+    width:100% !important;
+    margin-bottom:0 !important;
+    vertical-align:middle;
+}
+
+.table thead th{
+    padding:11px 12px !important;
+    background:#f8fafc !important;
+    border-bottom:1px solid #e5e7eb !important;
+    color:#64748b !important;
+    font-size:10px;
+    font-weight:650;
+    text-transform:uppercase;
+    white-space:nowrap;
+}
+
+.table tbody td{
+    padding:12px !important;
+    border-color:#eef1f4 !important;
+    color:#374151;
+    font-size:12px;
+}
+
+.patient-name{
+    color:#1f2937;
+    font-weight:650;
+}
+
+.patient-sub{
+    margin-top:2px;
+    color:#94a3b8;
+    font-size:9px;
+}
+
+
+/* =========================================================
+   NUMBER
+========================================================= */
+
+.number-cell{
+    width:55px;
+    text-align:center;
+}
+
+.number-circle{
+    width:30px;
+    height:30px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    margin:auto;
+    border-radius:8px;
+    background:#f1f5f9;
+    color:#64748b;
+    font-size:10px;
+    font-weight:700;
+}
+
+
+/* =========================================================
+   BADGES
+========================================================= */
+
+.status-badge{
+    display:inline-flex;
+    align-items:center;
+    gap:4px;
+    padding:5px 8px;
+    border-radius:6px;
+    font-size:10px;
+    font-weight:650;
+    white-space:nowrap;
+}
+
+.status-approved{
+    background:#ecfdf5;
+    color:#15803d;
+}
+
+.status-completed{
+    background:#eff6ff;
+    color:#2563eb;
+}
+
+.status-admitted{
+    background:#fff7ed;
+    color:#c2410c;
+}
+
+.status-pending{
+    background:#fef3c7;
+    color:#92400e;
+}
+
+.status-early{
+    background:#fff7ed;
+    color:#c2410c;
+}
+
+.status-normal{
+    background:#ecfdf5;
+    color:#15803d;
+}
+
+.status-review{
+    background:#f5f3ff;
+    color:#7c3aed;
+}
+
+.status-other{
+    background:#f3f4f6;
+    color:#64748b;
+}
+
+
+/* =========================================================
+   ACTION
+========================================================= */
+
+.action-buttons{
+    white-space:nowrap;
+}
+
+.btn-view,
+.btn-discharge{
+    padding:6px 9px;
+    border-radius:7px;
+    font-size:10px;
+    font-weight:600;
+}
+
+
+/* =========================================================
+   DATATABLE
+========================================================= */
+
+.dataTables_filter{
+    display:none;
+}
+
+.dataTables_wrapper .dataTables_length{
+    margin-top:15px;
+    color:#64748b;
+    font-size:11px;
+}
+
+.dataTables_wrapper .dataTables_info{
+    padding-top:19px !important;
+    color:#94a3b8 !important;
+    font-size:11px;
+}
+
+.dataTables_wrapper .dataTables_paginate{
+    padding-top:13px !important;
+}
+
+
+/* =========================================================
+   MODAL
+========================================================= */
+
+.custom-modal-overlay{
+    display:none;
+    position:fixed;
+    inset:0;
+    z-index:99999;
+    padding:20px;
+    background:rgba(15,23,42,.48);
+    backdrop-filter:blur(3px);
+    align-items:center;
+    justify-content:center;
+}
+
+.custom-modal-overlay.show{
+    display:flex;
+}
+
+.custom-modal{
+    width:100%;
+    max-width:410px;
+    padding:28px;
+    background:#fff;
+    border:1px solid #e5e7eb;
+    border-radius:14px;
+    box-shadow:0 24px 60px rgba(15,23,42,.20);
+    text-align:center;
+}
+
+.modal-icon{
+    width:54px;
+    height:54px;
+    margin:0 auto 17px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    border-radius:50%;
+    font-size:23px;
+    background:#fff7ed;
+    border:1px solid #fed7aa;
+    color:#ea580c;
+}
+
+.modal-buttons{
+    display:flex;
+    justify-content:center;
+    gap:9px;
+}
+
+.modal-buttons button{
+    min-width:105px;
+    padding:9px 16px;
+    border:0;
+    border-radius:8px;
+    font-size:12px;
+    font-weight:600;
+}
+
+.btn-modal-cancel{
+    background:#f1f5f9;
+    color:#475569;
+}
+
+.btn-modal-confirm{
+    background:#dc2626;
+    color:#fff;
+}
+
+
+@media(max-width:1100px){
+
+    .patient-tabs{
+        overflow-x:auto;
+        flex-wrap:nowrap;
+    }
+
+    .patient-tabs .nav-item{
+        flex:0 0 auto;
+    }
+}
+
+@media(max-width:768px){
+
+    .content{
+        padding:18px;
+    }
+
+    .page-title{
+        font-size:23px;
+    }
+}
+
+</style>
 
 </head>
 
 
 <body>
 
-
 <div class="d-flex">
 
+<?php
 
-    <!-- =====================================================
-         SIDEBAR
-    ===================================================== -->
+if ($role === 'admin') {
+    include("../includes/sidebar_admin.php");
+}
+else {
+    include("../includes/sidebar_doctor.php");
+}
 
-    <?php
+?>
 
-    if ($role === 'admin') {
 
-        include("../includes/sidebar_admin.php");
+<div class="content">
 
-    } else {
 
-        include("../includes/sidebar_doctor.php");
+<div class="page-header">
 
-    }
+<h1 class="page-title">
+Patient Management
+</h1>
 
-    ?>
-
-
-    <!-- =====================================================
-         CONTENT
-    ===================================================== -->
-
-    <div class="content">
-
-
-        <!-- =================================================
-             PAGE TITLE
-        ================================================= -->
-
-        <div class="page-title">
-
-            <i class="bi bi-people-fill me-2"></i>
-
-            Patient Management
-
-        </div>
-
-
-        <!-- =================================================
-             STATISTICS
-        ================================================= -->
-
-        <div class="row g-3 mb-4">
-
-
-            <div class="col-md-3">
-
-                <div class="stats-card">
-
-                    <h6>
-                        Admitted Patients
-                    </h6>
-
-                    <h2>
-                        <?= $totalCurrent ?>
-                    </h2>
-
-                </div>
-
-            </div>
-
-
-            <div class="col-md-3">
-
-                <div class="stats-card">
-
-                    <h6>
-                        Diagnosed
-                    </h6>
-
-                    <h2>
-                        <?= $totalDiagnosed ?>
-                    </h2>
-
-                </div>
-
-            </div>
-
-
-            <div class="col-md-3">
-
-                <div class="stats-card">
-
-                    <h6>
-                        Medication
-                    </h6>
-
-                    <h2>
-                        <?= $totalMedication ?>
-                    </h2>
-
-                </div>
-
-            </div>
-
-
-            <div class="col-md-3">
-
-                <div class="stats-card">
-
-                    <h6>
-                        Discharged
-                    </h6>
-
-                    <h2>
-                        <?= $totalDischarged ?>
-                    </h2>
-
-                </div>
-
-            </div>
-
-
-        </div>
-
-
-        <!-- =================================================
-             SEARCH + FILTER
-        ================================================= -->
-
-        <div class="card-box mb-3">
-
-
-            <div class="row g-2">
-
-
-                <!-- SEARCH -->
-
-                <div class="col-md-5">
-
-                    <input
-                        type="text"
-                        id="searchBox"
-                        class="form-control"
-                        placeholder="🔍 Search patient or record"
-                    >
-
-                </div>
-
-
-                <!-- TYPE -->
-
-                <div class="col-md-3">
-
-                    <select
-                        id="typeFilter"
-                        class="form-select"
-                    >
-
-                        <option value="">
-                            All Types
-                        </option>
-
-                        <option value="current">
-                            Admitted Patients
-                        </option>
-
-                        <option value="walkin">
-                            Walk-In
-                        </option>
-
-                        <option value="appointment">
-                            Appointment
-                        </option>
-
-                        <option value="diagnosed">
-                            Diagnosed
-                        </option>
-
-                        <option value="discharged">
-                            Discharged
-                        </option>
-
-                    </select>
-
-                </div>
-
-
-                <!-- SORT -->
-
-                <div class="col-md-4">
-
-                    <select
-                        id="sortOrder"
-                        class="form-select"
-                    >
-
-                        <option value="latest">
-                            Newest First
-                        </option>
-
-                        <option value="oldest">
-                            Oldest First
-                        </option>
-
-                        <option value="asc">
-                            Name A-Z
-                        </option>
-
-                        <option value="desc">
-                            Name Z-A
-                        </option>
-
-                    </select>
-
-                </div>
-
-
-            </div>
-
-
-            <?php if ($role === 'admin'): ?>
-
-                <!-- =================================================
-                     ADMIN DATE FILTER
-                ================================================= -->
-
-                <div class="date-filter-box mt-3">
-
-
-                    <div class="date-filter-title">
-
-                        <i class="bi bi-calendar3 me-2"></i>
-
-                        View Patient Records by Date
-
-                    </div>
-
-
-                    <div class="row g-2 align-items-end">
-
-
-                        <div class="col-md-5">
-
-
-                            <div class="date-filter-label">
-
-                                Select Date
-
-                            </div>
-
-
-                            <input
-                                type="date"
-                                id="recordDate"
-                                class="form-control"
-                            >
-
-
-                        </div>
-
-
-                        <div class="col-md-2">
-
-
-                            <button
-                                type="button"
-                                id="todayBtn"
-                                class="btn btn-primary btn-date w-100"
-                            >
-
-                                <i class="bi bi-calendar-day me-1"></i>
-
-                                Today
-
-                            </button>
-
-
-                        </div>
-
-
-                        <div class="col-md-2">
-
-
-                            <button
-                                type="button"
-                                id="clearDateBtn"
-                                class="btn btn-outline-secondary btn-date w-100"
-                            >
-
-                                <i class="bi bi-x-circle me-1"></i>
-
-                                Clear
-
-                            </button>
-
-
-                        </div>
-
-
-                    </div>
-
-
-                    <div
-                        id="dateActiveMessage"
-                        class="date-active-message"
-                    >
-
-                        <i class="bi bi-funnel-fill me-1"></i>
-
-                        Showing records for
-                        <strong id="selectedDateText"></strong>
-
-                    </div>
-
-
-                </div>
-
-            <?php endif; ?>
-
-
-        </div>
-
-
-        <!-- =================================================
-             TABLE CARD
-        ================================================= -->
-
-        <div class="card-box">
-
-
-            <!-- TABS -->
-
-            <ul class="nav nav-tabs mb-3">
-
-
-                <li class="nav-item">
-
-                    <button
-                        class="nav-link active"
-                        data-bs-toggle="tab"
-                        data-bs-target="#current"
-                    >
-
-                        Admitted Patients
-
-                    </button>
-
-                </li>
-
-
-                <li class="nav-item">
-
-                    <button
-                        class="nav-link"
-                        data-bs-toggle="tab"
-                        data-bs-target="#walkin"
-                    >
-
-                        Walk-In Patients
-
-                    </button>
-
-                </li>
-
-
-                <li class="nav-item">
-
-                    <button
-                        class="nav-link"
-                        data-bs-toggle="tab"
-                        data-bs-target="#appointment"
-                    >
-
-                        Appointment Patients
-
-                    </button>
-
-                </li>
-
-
-                <li class="nav-item">
-
-                    <button
-                        class="nav-link"
-                        data-bs-toggle="tab"
-                        data-bs-target="#diagnosed"
-                    >
-
-                        Diagnosed Patients
-
-                    </button>
-
-                </li>
-
-
-                <li class="nav-item">
-
-                    <button
-                        class="nav-link"
-                        data-bs-toggle="tab"
-                        data-bs-target="#discharged"
-                    >
-
-                        Discharged Patients
-
-                    </button>
-
-                </li>
-
-
-            </ul>
-
-
-            <div class="tab-content">
-
-
-                <!-- =================================================
-                     ADMITTED PATIENTS
-                ================================================= -->
-
-                <div
-                    class="tab-pane fade show active"
-                    id="current"
-                >
-
-
-                    <table
-                        class="table table-bordered"
-                        id="currentTable"
-                    >
-
-                        <thead>
-
-                            <tr>
-
-                                <th>
-                                    Patient
-                                </th>
-
-                                <th>
-                                    Ward
-                                </th>
-
-                                <th>
-                                    Bed
-                                </th>
-
-                                <th>
-                                    Admission Date
-                                </th>
-
-                                <th>
-                                    Action
-                                </th>
-
-                            </tr>
-
-                        </thead>
-
-
-                        <tbody>
-
-
-                        <?php foreach ($currentList as $p): ?>
-
-                            <tr
-                                data-record-date="<?= htmlspecialchars(
-                                    $p['ADMISSION_SORT'] ?? '',
-                                    ENT_QUOTES,
-                                    'UTF-8'
-                                ) ?>"
-                            >
-
-
-                                <td>
-
-                                    <?= htmlspecialchars(
-                                        $p['NAME'] ?? ''
-                                    ) ?>
-
-                                </td>
-
-
-                                <td>
-
-                                    <?= htmlspecialchars(
-                                        $p['WARD_NAME'] ?? ''
-                                    ) ?>
-
-                                </td>
-
-
-                                <td>
-
-                                    <?= htmlspecialchars(
-                                        $p['BED_NUMBER'] ?? ''
-                                    ) ?>
-
-                                </td>
-
-
-                                <td
-                                    data-date="<?= htmlspecialchars(
-                                        $p['ADMISSION_SORT'] ?? ''
-                                    ) ?>"
-                                >
-
-                                    <?= htmlspecialchars(
-                                        $p['ADMISSION_DATE'] ?? ''
-                                    ) ?>
-
-                                </td>
-
-
-                                <td class="action-buttons">
-
-
-                                    <!-- VIEW -->
-
-                                    <a
-                                        href="patient_details.php?id=<?= urlencode(
-                                            $p['ADMISSION_ID']
-                                        ) ?>"
-                                        class="btn btn-primary btn-sm btn-view me-1"
-                                    >
-
-                                        <i class="bi bi-eye"></i>
-
-                                        View
-
-                                    </a>
-
-
-                                    <!-- DISCHARGE -->
-
-                                    <button
-                                        type="button"
-                                        class="btn btn-danger btn-sm btn-discharge discharge-btn"
-                                        data-url="discharge_patient.php?admission_id=<?= urlencode(
-                                            $p['ADMISSION_ID']
-                                        ) ?>"
-                                        data-patient="<?= htmlspecialchars(
-                                            $p['NAME'] ?? '',
-                                            ENT_QUOTES,
-                                            'UTF-8'
-                                        ) ?>"
-                                    >
-
-                                        <i class="bi bi-box-arrow-right"></i>
-
-                                        Discharge
-
-                                    </button>
-
-
-                                </td>
-
-
-                            </tr>
-
-                        <?php endforeach; ?>
-
-
-                        </tbody>
-
-                    </table>
-
-
-                </div>
-
-
-                <!-- =================================================
-                     WALK-IN
-                ================================================= -->
-
-                <div
-                    class="tab-pane fade"
-                    id="walkin"
-                >
-
-
-                    <table
-                        class="table table-bordered"
-                        id="walkinTable"
-                    >
-
-                        <thead>
-
-                            <tr>
-
-                                <th>
-                                    Patient
-                                </th>
-
-                                <th>
-                                    Date
-                                </th>
-
-                            </tr>
-
-                        </thead>
-
-
-                        <tbody>
-
-
-                        <?php foreach ($walkinPatients as $w): ?>
-
-                            <tr
-                                data-record-date="<?= htmlspecialchars(
-                                    $w['CONSULTATION_SORT'] ?? '',
-                                    ENT_QUOTES,
-                                    'UTF-8'
-                                ) ?>"
-                            >
-
-                                <td>
-
-                                    <?= htmlspecialchars(
-                                        $w['NAME'] ?? ''
-                                    ) ?>
-
-                                </td>
-
-
-                                <td
-                                    data-date="<?= htmlspecialchars(
-                                        $w['CONSULTATION_SORT'] ?? ''
-                                    ) ?>"
-                                >
-
-                                    <?= htmlspecialchars(
-                                        $w['CONSULTATION_DATE'] ?? ''
-                                    ) ?>
-
-                                </td>
-
-                            </tr>
-
-                        <?php endforeach; ?>
-
-
-                        </tbody>
-
-                    </table>
-
-
-                </div>
-
-
-                <!-- =================================================
-                     APPOINTMENTS
-                ================================================= -->
-
-                <div
-                    class="tab-pane fade"
-                    id="appointment"
-                >
-
-
-                    <table
-                        class="table table-bordered"
-                        id="appointmentTable"
-                    >
-
-                        <thead>
-
-                            <tr>
-
-                                <th>
-                                    Patient
-                                </th>
-
-                                <th>
-                                    Date
-                                </th>
-
-                                <th>
-                                    Department
-                                </th>
-
-                                <th>
-                                    Status
-                                </th>
-
-                            </tr>
-
-                        </thead>
-
-
-                        <tbody>
-
-
-                        <?php foreach ($appointmentPatients as $a): ?>
-
-
-                            <?php
-
-                            $appointmentSortDate =
-                                convertAppointmentDate(
-                                    $a['APPOINTMENT_DATE'] ?? ''
-                                );
-
-                            ?>
-
-
-                            <tr
-                                data-record-date="<?= htmlspecialchars(
-                                    $appointmentSortDate,
-                                    ENT_QUOTES,
-                                    'UTF-8'
-                                ) ?>"
-                            >
-
-
-                                <td>
-
-                                    <?= htmlspecialchars(
-                                        $a['NAME'] ?? ''
-                                    ) ?>
-
-                                </td>
-
-
-                                <td
-                                    data-date="<?= htmlspecialchars(
-                                        $appointmentSortDate
-                                    ) ?>"
-                                >
-
-                                    <?= htmlspecialchars(
-                                        $a['APPOINTMENT_DATE'] ?? ''
-                                    ) ?>
-
-                                </td>
-
-
-                                <td>
-
-                                    <?= htmlspecialchars(
-                                        $a['DEPARTMENT'] ?? ''
-                                    ) ?>
-
-                                </td>
-
-
-                                <td>
-
-                                    <?= htmlspecialchars(
-                                        $a['STATUS'] ?? ''
-                                    ) ?>
-
-                                </td>
-
-
-                            </tr>
-
-
-                        <?php endforeach; ?>
-
-
-                        </tbody>
-
-                    </table>
-
-
-                </div>
-
-
-                <!-- =================================================
-                     DIAGNOSED
-                ================================================= -->
-
-                <div
-                    class="tab-pane fade"
-                    id="diagnosed"
-                >
-
-
-                    <table
-                        class="table table-bordered"
-                        id="diagnosedTable"
-                    >
-
-                        <thead>
-
-                            <tr>
-
-                                <th>
-                                    Patient
-                                </th>
-
-                                <th>
-                                    Diagnosis
-                                </th>
-
-                                <th>
-                                    Date
-                                </th>
-
-                            </tr>
-
-                        </thead>
-
-
-                        <tbody>
-
-
-                        <?php foreach ($diagnosedList as $d): ?>
-
-
-                            <tr
-                                data-record-date="<?= htmlspecialchars(
-                                    $d['DATE_SORT'] ?? '',
-                                    ENT_QUOTES,
-                                    'UTF-8'
-                                ) ?>"
-                            >
-
-
-                                <td>
-
-                                    <?= htmlspecialchars(
-                                        $d['NAME'] ?? ''
-                                    ) ?>
-
-                                </td>
-
-
-                                <td>
-
-                                    <?= htmlspecialchars(
-                                        $d['DIAGNOSIS_DETAILS'] ?? ''
-                                    ) ?>
-
-                                </td>
-
-
-                                <td
-                                    data-date="<?= htmlspecialchars(
-                                        $d['DATE_SORT'] ?? ''
-                                    ) ?>"
-                                >
-
-                                    <?= htmlspecialchars(
-                                        $d['DATE_RECORDED'] ?? ''
-                                    ) ?>
-
-                                </td>
-
-
-                            </tr>
-
-
-                        <?php endforeach; ?>
-
-
-                        </tbody>
-
-                    </table>
-
-
-                </div>
-
-
-                <!-- =================================================
-                     DISCHARGED
-                ================================================= -->
-
-                <div
-                    class="tab-pane fade"
-                    id="discharged"
-                >
-
-
-                    <table
-                        class="table table-bordered"
-                        id="dischargedTable"
-                    >
-
-                        <thead>
-
-                            <tr>
-
-                                <th>
-                                    Patient
-                                </th>
-
-                                <th>
-                                    Admission Date
-                                </th>
-
-                                <th>
-                                    Discharge Date
-                                </th>
-
-                                <th>
-                                    Length of Stay
-                                </th>
-
-                                <th>
-                                    Action
-                                </th>
-
-                            </tr>
-
-                        </thead>
-
-
-                        <tbody>
-
-
-                        <?php foreach ($dischargedList as $d): ?>
-
-
-                            <?php
-
-                            $admissionDate =
-                                !empty($d['ADMISSION_SORT'])
-                                    ? new DateTime($d['ADMISSION_SORT'])
-                                    : null;
-
-                            $dischargeDate =
-                                !empty($d['DISCHARGE_SORT'])
-                                    ? new DateTime($d['DISCHARGE_SORT'])
-                                    : null;
-
-                            $days = 0;
-
-                            if (
-                                $admissionDate &&
-                                $dischargeDate
-                            ) {
-
-                                $days =
-                                    $admissionDate
-                                    ->diff($dischargeDate)
-                                    ->days + 1;
-
-                            }
-
-                            ?>
-
-
-                            <tr
-                                data-record-date="<?= htmlspecialchars(
-                                    $d['DISCHARGE_SORT'] ?? '',
-                                    ENT_QUOTES,
-                                    'UTF-8'
-                                ) ?>"
-                            >
-
-
-                                <td>
-
-                                    <?= htmlspecialchars(
-                                        $d['NAME'] ?? ''
-                                    ) ?>
-
-                                </td>
-
-
-                                <td
-                                    data-date="<?= htmlspecialchars(
-                                        $d['ADMISSION_SORT'] ?? ''
-                                    ) ?>"
-                                >
-
-                                    <?= htmlspecialchars(
-                                        $d['ADMISSION_DATE'] ?? ''
-                                    ) ?>
-
-                                </td>
-
-
-                                <td
-                                    data-date="<?= htmlspecialchars(
-                                        $d['DISCHARGE_SORT'] ?? ''
-                                    ) ?>"
-                                >
-
-                                    <?= htmlspecialchars(
-                                        $d['DISCHARGE_DATE'] ?? ''
-                                    ) ?>
-
-                                </td>
-
-
-                                <td>
-
-                                    <?= $days ?> Day(s)
-
-                                </td>
-
-
-                                <td>
-
-                                    <a
-                                        href="patient_details.php?id=<?= urlencode(
-                                            $d['ADMISSION_ID']
-                                        ) ?>"
-                                        class="btn btn-primary btn-sm"
-                                    >
-
-                                        <i class="bi bi-eye"></i>
-
-                                        View
-
-                                    </a>
-
-                                </td>
-
-
-                            </tr>
-
-
-                        <?php endforeach; ?>
-
-
-                        </tbody>
-
-                    </table>
-
-
-                </div>
-
-
-            </div>
-
-
-        </div>
-
-
-    </div>
+<div class="page-subtitle">
+View complete patient activity across appointments, consultations, admissions, clinical reviews and discharge.
+</div>
 
 </div>
 
 
-<!-- =========================================================
-     CUSTOM DISCHARGE CONFIRMATION POPUP
-========================================================= -->
+<!-- =====================================================
+     STATISTICS
+===================================================== -->
+
+<div class="row g-3 mb-4">
+
+<div class="col-xl col-md-6">
+<div class="stats-card">
+
+<div class="stat-content">
+
+<div>
+<div class="stat-label">Admitted Patients</div>
+<div class="stat-number"><?= $totalCurrent ?></div>
+<div class="stat-subtitle">Currently in hospital</div>
+</div>
+
+<div class="stat-icon icon-admitted">
+<i class="bi bi-hospital"></i>
+</div>
+
+</div>
+
+</div>
+</div>
+
+
+<div class="col-xl col-md-6">
+<div class="stats-card">
+
+<div class="stat-content">
+
+<div>
+<div class="stat-label">Clinical Records</div>
+<div class="stat-number"><?= $totalDiagnosed ?></div>
+<div class="stat-subtitle">Diagnosis & reviews</div>
+</div>
+
+<div class="stat-icon icon-diagnosed">
+<i class="bi bi-clipboard2-check"></i>
+</div>
+
+</div>
+
+</div>
+</div>
+
+
+<div class="col-xl col-md-6">
+<div class="stats-card">
+
+<div class="stat-content">
+
+<div>
+<div class="stat-label">Medication</div>
+<div class="stat-number"><?= $totalMedication ?></div>
+<div class="stat-subtitle">All medication orders</div>
+</div>
+
+<div class="stat-icon icon-medication">
+<i class="bi bi-capsule"></i>
+</div>
+
+</div>
+
+</div>
+</div>
+
+
+<div class="col-xl col-md-6">
+<div class="stats-card">
+
+<div class="stat-content">
+
+<div>
+<div class="stat-label">Discharge Medicine</div>
+<div class="stat-number"><?= $totalDischargeMedication ?></div>
+<div class="stat-subtitle">Take-home prescriptions</div>
+</div>
+
+<div class="stat-icon icon-discharge-med">
+<i class="bi bi-prescription2"></i>
+</div>
+
+</div>
+
+</div>
+</div>
+
+
+<div class="col-xl col-md-6">
+<div class="stats-card">
+
+<div class="stat-content">
+
+<div>
+<div class="stat-label">Discharged</div>
+<div class="stat-number"><?= $totalDischarged ?></div>
+<div class="stat-subtitle">Completed admissions</div>
+</div>
+
+<div class="stat-icon icon-discharged">
+<i class="bi bi-box-arrow-right"></i>
+</div>
+
+</div>
+
+</div>
+</div>
+
+</div>
+
+
+<!-- =====================================================
+     FILTER
+===================================================== -->
+
+<div class="filter-card">
+
+<div class="filter-title">
+<i class="bi bi-funnel me-1"></i>
+Search & Filter
+</div>
+
+
+<div class="row g-2">
+
+<div class="col-lg-5">
+
+<div class="filter-label">
+Search Patient
+</div>
+
+<div class="search-wrapper">
+
+<i class="bi bi-search"></i>
+
+<input
+    type="text"
+    id="searchBox"
+    class="form-control"
+    placeholder="Search patient, ward, doctor, diagnosis..."
+>
+
+</div>
+</div>
+
+
+<div class="col-lg-3">
+
+<div class="filter-label">
+Record Type
+</div>
+
+<select
+    id="typeFilter"
+    class="form-select"
+>
+
+<option value="">
+All Types
+</option>
+
+<option value="current">
+Admitted Patients
+</option>
+
+<option value="walkin">
+Walk-In
+</option>
+
+<option value="appointment">
+Appointment
+</option>
+
+<option value="diagnosed">
+Clinical Records
+</option>
+
+<option value="discharged">
+Discharged
+</option>
+
+</select>
+
+</div>
+
+
+<div class="col-lg-4">
+
+<div class="filter-label">
+Sort By
+</div>
+
+<select
+    id="sortOrder"
+    class="form-select"
+>
+
+<option value="latest">
+Newest First
+</option>
+
+<option value="oldest">
+Oldest First
+</option>
+
+<option value="asc">
+Patient Name A-Z
+</option>
+
+<option value="desc">
+Patient Name Z-A
+</option>
+
+</select>
+
+</div>
+
+</div>
+
+
+<?php if ($role === 'admin'): ?>
+
+<div class="date-filter-box">
+
+<div class="date-filter-header">
+
+<i class="bi bi-calendar3"></i>
+
+View Patient Records by Date
+
+</div>
+
+
+<div class="row g-2 align-items-end">
+
+<div class="col-lg-4 col-md-6">
+
+<div class="filter-label">
+Select Date
+</div>
+
+<input
+    type="date"
+    id="recordDate"
+    class="form-control"
+>
+
+</div>
+
+
+<div class="col-lg-2 col-md-3">
+
+<button
+    type="button"
+    id="todayBtn"
+    class="btn btn-primary btn-date w-100"
+>
+
+<i class="bi bi-calendar-day me-1"></i>
+Today
+
+</button>
+
+</div>
+
+
+<div class="col-lg-2 col-md-3">
+
+<button
+    type="button"
+    id="clearDateBtn"
+    class="btn btn-outline-secondary btn-date w-100"
+>
+
+<i class="bi bi-arrow-counterclockwise me-1"></i>
+Clear
+
+</button>
+
+</div>
+
+
+<div class="col-lg-4">
+
+<button
+    type="button"
+    id="downloadPatientBtn"
+    class="btn btn-download btn-date w-100"
+>
+
+<i class="bi bi-download me-1"></i>
+Download Patient List
+
+</button>
+
+</div>
+
+</div>
+
+
+<div
+    id="dateActiveMessage"
+    class="date-active-message"
+>
+
+Showing records for
+
+<strong id="selectedDateText"></strong>
+
+</div>
+
+</div>
+
+<?php endif; ?>
+
+</div>
+
+
+<!-- =====================================================
+     TABLE CARD
+===================================================== -->
+
+<div class="table-card">
+
+<div class="table-card-header">
+
+<h5 class="table-card-title">
+Patient Records
+</h5>
+
+<div class="table-card-subtitle">
+Admin can review the complete patient journey from consultation to discharge.
+</div>
+
+</div>
+
+
+<ul class="nav nav-tabs patient-tabs">
+
+<li class="nav-item">
+<button
+    class="nav-link active"
+    data-bs-toggle="tab"
+    data-bs-target="#current"
+>
+<i class="bi bi-hospital me-1"></i>
+Admitted
+</button>
+</li>
+
+<li class="nav-item">
+<button
+    class="nav-link"
+    data-bs-toggle="tab"
+    data-bs-target="#walkin"
+>
+<i class="bi bi-person-walking me-1"></i>
+Walk-In
+</button>
+</li>
+
+<li class="nav-item">
+<button
+    class="nav-link"
+    data-bs-toggle="tab"
+    data-bs-target="#appointment"
+>
+<i class="bi bi-calendar-event me-1"></i>
+Appointments
+</button>
+</li>
+
+<li class="nav-item">
+<button
+    class="nav-link"
+    data-bs-toggle="tab"
+    data-bs-target="#diagnosed"
+>
+<i class="bi bi-clipboard2-check me-1"></i>
+Clinical Records
+</button>
+</li>
+
+<li class="nav-item">
+<button
+    class="nav-link"
+    data-bs-toggle="tab"
+    data-bs-target="#discharged"
+>
+<i class="bi bi-box-arrow-right me-1"></i>
+Discharged
+</button>
+</li>
+
+</ul>
+
+
+<div class="tab-content">
+
+
+<!-- =====================================================
+     ADMITTED
+===================================================== -->
+
+<div
+    class="tab-pane fade show active"
+    id="current"
+>
+
+<div class="table-responsive">
+
+<table
+    class="table"
+    id="currentTable"
+>
+
+<thead>
+<tr>
+<th>No.</th>
+<th>Patient</th>
+<th>Ward</th>
+<th>Bed</th>
+<th>Doctor</th>
+<th>Admission</th>
+<th>Expected Discharge</th>
+<th>Stay</th>
+<th>Action</th>
+</tr>
+</thead>
+
+<tbody>
+
+<?php foreach ($currentList as $p): ?>
+
+<tr
+    data-record-date="<?= h($p['ADMISSION_SORT']) ?>"
+>
+
+<td class="number-cell"></td>
+
+<td>
+
+<div class="patient-name">
+<?= h($p['NAME']) ?>
+</div>
+
+<div class="patient-sub">
+<?= h($p['IC_NUMBER'] ?: '-') ?>
+</div>
+
+</td>
+
+<td><?= h($p['WARD_NAME']) ?></td>
+
+<td>
+<span class="status-badge status-other">
+Bed <?= h($p['BED_NUMBER']) ?>
+</span>
+</td>
+
+<td>
+<?= h($p['DOCTOR_NAME'] ?: '-') ?>
+</td>
+
+<td
+    data-date="<?= h($p['ADMISSION_SORT']) ?>"
+>
+<?= h($p['ADMISSION_DATE']) ?>
+</td>
+
+<td>
+
+<?php if (!empty($p['EXPECTED_DISCHARGE_DATE'])): ?>
+
+<?= h($p['EXPECTED_DISCHARGE_DATE']) ?>
+
+<?php else: ?>
+
+<span class="status-badge status-pending">
+Not Set
+</span>
+
+<?php endif; ?>
+
+</td>
+
+<td>
+
+<span class="status-badge status-approved">
+
+<?= max(
+    1,
+    (int)$p['STAY_DAYS']
+) ?>
+
+day(s)
+
+</span>
+
+</td>
+
+<td class="action-buttons">
+
+<a
+    href="patient_details.php?id=<?= urlencode($p['ADMISSION_ID']) ?>"
+    class="btn btn-outline-primary btn-sm btn-view me-1"
+>
+<i class="bi bi-eye me-1"></i>
+View
+</a>
+
+
+<?php if ($role === 'admin'): ?>
+
+<button
+    type="button"
+    class="btn btn-outline-danger btn-sm btn-discharge discharge-btn"
+    data-url="discharge_patient.php?admission_id=<?= urlencode($p['ADMISSION_ID']) ?>"
+    data-patient="<?= h($p['NAME']) ?>"
+>
+
+<i class="bi bi-box-arrow-right me-1"></i>
+Discharge
+
+</button>
+
+<?php endif; ?>
+
+</td>
+
+</tr>
+
+<?php endforeach; ?>
+
+</tbody>
+</table>
+
+</div>
+</div>
+
+
+<!-- =====================================================
+     WALK-IN
+===================================================== -->
+
+<div
+    class="tab-pane fade"
+    id="walkin"
+>
+
+<div class="table-responsive">
+
+<table
+    class="table"
+    id="walkinTable"
+>
+
+<thead>
+<tr>
+<th>No.</th>
+<th>Patient</th>
+<th>Date</th>
+<th>Department</th>
+<th>Doctor</th>
+<th>Status</th>
+</tr>
+</thead>
+
+<tbody>
+
+<?php foreach ($walkinPatients as $w): ?>
+
+<tr
+    data-record-date="<?= h($w['CONSULTATION_SORT']) ?>"
+>
+
+<td class="number-cell"></td>
+
+<td>
+
+<div class="patient-name">
+<?= h($w['NAME']) ?>
+</div>
+
+<div class="patient-sub">
+<?= h($w['IC_NUMBER'] ?: '-') ?>
+</div>
+
+</td>
+
+<td data-date="<?= h($w['CONSULTATION_SORT']) ?>">
+<?= h($w['CONSULTATION_DATE']) ?>
+</td>
+
+<td><?= h($w['DEPARTMENT'] ?: '-') ?></td>
+
+<td><?= h($w['DOCTOR_NAME'] ?: '-') ?></td>
+
+<td>
+
+<span class="status-badge status-other">
+<?= h($w['STATUS'] ?: '-') ?>
+</span>
+
+</td>
+
+</tr>
+
+<?php endforeach; ?>
+
+</tbody>
+</table>
+
+</div>
+</div>
+
+
+<!-- =====================================================
+     APPOINTMENT
+===================================================== -->
+
+<div
+    class="tab-pane fade"
+    id="appointment"
+>
+
+<div class="table-responsive">
+
+<table
+    class="table"
+    id="appointmentTable"
+>
+
+<thead>
+<tr>
+<th>No.</th>
+<th>Patient</th>
+<th>Date</th>
+<th>Time</th>
+<th>Department</th>
+<th>Doctor</th>
+<th>Status</th>
+</tr>
+</thead>
+
+<tbody>
+
+<?php foreach ($appointmentPatients as $a): ?>
+
+<?php
+
+$appointmentSortDate =
+    convertAppointmentDate(
+        $a['APPOINTMENT_DATE']
+        ?? ''
+    );
+
+$status =
+    strtolower(
+        trim(
+            $a['STATUS']
+            ?? ''
+        )
+    );
+
+?>
+
+<tr
+    data-record-date="<?= h($appointmentSortDate) ?>"
+>
+
+<td class="number-cell"></td>
+
+<td>
+
+<div class="patient-name">
+<?= h(
+    $a['NAME']
+    ?: 'Unknown Patient'
+) ?>
+</div>
+
+<div class="patient-sub">
+<?= h($a['IC_NUMBER'] ?: '-') ?>
+</div>
+
+</td>
+
+<td data-date="<?= h($appointmentSortDate) ?>">
+<?= h($a['APPOINTMENT_DATE']) ?>
+</td>
+
+<td>
+<?= h($a['APPOINTMENT_TIME'] ?: '-') ?>
+</td>
+
+<td><?= h($a['DEPARTMENT'] ?: '-') ?></td>
+
+<td><?= h($a['DOCTOR_NAME'] ?: '-') ?></td>
+
+<td>
+
+<?php if ($status === 'approved'): ?>
+
+<span class="status-badge status-approved">
+<i class="bi bi-check-circle"></i>
+Approved
+</span>
+
+<?php elseif ($status === 'completed'): ?>
+
+<span class="status-badge status-completed">
+<i class="bi bi-check2-all"></i>
+Completed
+</span>
+
+<?php elseif ($status === 'admitted'): ?>
+
+<span class="status-badge status-admitted">
+<i class="bi bi-hospital"></i>
+Admitted
+</span>
+
+<?php elseif ($status === 'pending'): ?>
+
+<span class="status-badge status-pending">
+<i class="bi bi-hourglass-split"></i>
+Pending
+</span>
+
+<?php else: ?>
+
+<span class="status-badge status-other">
+<?= h($a['STATUS']) ?>
+</span>
+
+<?php endif; ?>
+
+</td>
+
+</tr>
+
+<?php endforeach; ?>
+
+</tbody>
+</table>
+
+</div>
+</div>
+
+
+<!-- =====================================================
+     CLINICAL RECORDS
+===================================================== -->
+
+<div
+    class="tab-pane fade"
+    id="diagnosed"
+>
+
+<div class="table-responsive">
+
+<table
+    class="table"
+    id="diagnosedTable"
+>
+
+<thead>
+<tr>
+<th>No.</th>
+<th>Patient</th>
+<th>Type</th>
+<th>Diagnosis / Review</th>
+<th>Allergies</th>
+<th>Doctor</th>
+<th>Date / Time</th>
+</tr>
+</thead>
+
+<tbody>
+
+<?php foreach ($diagnosedList as $d): ?>
+
+<tr
+    data-record-date="<?= h($d['DATE_SORT']) ?>"
+>
+
+<td class="number-cell"></td>
+
+<td>
+<span class="patient-name">
+<?= h($d['NAME']) ?>
+</span>
+</td>
+
+<td>
+
+<span class="status-badge status-review">
+<?= h($d['DIAGNOSIS_TYPE']) ?>
+</span>
+
+</td>
+
+<td>
+<?= h($d['DIAGNOSIS_DETAILS']) ?>
+</td>
+
+<td>
+<?= h($d['ALLERGIES'] ?: '-') ?>
+</td>
+
+<td>
+<?= h($d['DOCTOR_NAME'] ?: '-') ?>
+</td>
+
+<td data-date="<?= h($d['DATE_SORT']) ?>">
+
+<?= h($d['DATE_RECORDED']) ?>
+
+<div class="patient-sub">
+<?= h($d['TIME_RECORDED']) ?>
+</div>
+
+</td>
+
+</tr>
+
+<?php endforeach; ?>
+
+</tbody>
+</table>
+
+</div>
+</div>
+
+
+<!-- =====================================================
+     DISCHARGED
+===================================================== -->
+
+<div
+    class="tab-pane fade"
+    id="discharged"
+>
+
+<div class="table-responsive">
+
+<table
+    class="table"
+    id="dischargedTable"
+>
+
+<thead>
+<tr>
+<th>No.</th>
+<th>Patient</th>
+<th>Ward / Bed</th>
+<th>Doctor</th>
+<th>Admission</th>
+<th>Expected</th>
+<th>Actual Discharge</th>
+<th>Type</th>
+<th>Stay</th>
+<th>Action</th>
+</tr>
+</thead>
+
+<tbody>
+
+<?php foreach ($dischargedList as $d): ?>
+
+<?php
+
+$admissionDate =
+    !empty($d['ADMISSION_SORT'])
+    ?
+    new DateTime(
+        $d['ADMISSION_SORT']
+    )
+    :
+    null;
+
+$dischargeDate =
+    !empty($d['DISCHARGE_SORT'])
+    ?
+    new DateTime(
+        $d['DISCHARGE_SORT']
+    )
+    :
+    null;
+
+$days = 0;
+
+if (
+    $admissionDate &&
+    $dischargeDate
+) {
+
+    $days =
+        $admissionDate
+        ->diff(
+            $dischargeDate
+        )
+        ->days
+        +
+        1;
+}
+
+?>
+
+<tr
+    data-record-date="<?= h($d['DISCHARGE_SORT']) ?>"
+>
+
+<td class="number-cell"></td>
+
+<td>
+
+<div class="patient-name">
+<?= h($d['NAME']) ?>
+</div>
+
+<div class="patient-sub">
+<?= h($d['IC_NUMBER'] ?: '-') ?>
+</div>
+
+</td>
+
+<td>
+
+<?= h($d['WARD_NAME'] ?: '-') ?>
+
+<div class="patient-sub">
+Bed <?= h($d['BED_NUMBER'] ?: '-') ?>
+</div>
+
+</td>
+
+<td>
+<?= h($d['DOCTOR_NAME'] ?: '-') ?>
+</td>
+
+<td data-date="<?= h($d['ADMISSION_SORT']) ?>">
+<?= h($d['ADMISSION_DATE']) ?>
+</td>
+
+<td>
+
+<?= h(
+    $d['EXPECTED_DISCHARGE_DATE']
+    ?: 'Not Set'
+) ?>
+
+</td>
+
+<td data-date="<?= h($d['DISCHARGE_SORT']) ?>">
+
+<?= h($d['DISCHARGE_DATE']) ?>
+
+</td>
+
+<td>
+
+<?php if ($d['DISCHARGE_TYPE'] === 'Early'): ?>
+
+<span class="status-badge status-early">
+<i class="bi bi-exclamation-triangle"></i>
+Early
+</span>
+
+<?php else: ?>
+
+<span class="status-badge status-normal">
+<i class="bi bi-check-circle"></i>
+Normal
+</span>
+
+<?php endif; ?>
+
+</td>
+
+<td>
+
+<span class="status-badge status-other">
+
+<i class="bi bi-clock"></i>
+
+<?= $days ?> Day(s)
+
+</span>
+
+</td>
+
+<td>
+
+<a
+    href="patient_details.php?id=<?= urlencode($d['ADMISSION_ID']) ?>"
+    class="btn btn-outline-primary btn-sm btn-view"
+>
+<i class="bi bi-eye me-1"></i>
+View
+</a>
+
+</td>
+
+</tr>
+
+<?php endforeach; ?>
+
+</tbody>
+</table>
+
+</div>
+</div>
+
+
+</div>
+</div>
+
+
+</div>
+</div>
+
+
+<?php if ($role === 'admin'): ?>
 
 <div
     id="dischargeModal"
     class="custom-modal-overlay"
 >
 
+<div class="custom-modal">
 
-    <div class="custom-modal">
+<div class="modal-icon">
+<i class="bi bi-exclamation-triangle"></i>
+</div>
 
+<h3>
+Discharge Patient?
+</h3>
 
-        <div class="modal-icon warning">
+<p id="dischargeMessage">
+Are you sure you want to continue?
+</p>
 
-            <i class="bi bi-exclamation-triangle"></i>
+<div class="modal-buttons">
 
-        </div>
+<button
+    type="button"
+    class="btn-modal-cancel"
+    id="cancelDischarge"
+>
+Cancel
+</button>
 
-
-        <h3>
-            Discharge Patient?
-        </h3>
-
-
-        <p id="dischargeMessage">
-
-            Are you sure you want to discharge this patient?
-
-        </p>
-
-
-        <div class="modal-buttons">
-
-
-            <button
-                type="button"
-                class="btn-modal-cancel"
-                id="cancelDischarge"
-            >
-
-                Cancel
-
-            </button>
-
-
-            <button
-                type="button"
-                class="btn-modal-confirm"
-                id="confirmDischarge"
-            >
-
-                <i class="bi bi-check-lg"></i>
-
-                Discharge
-
-            </button>
-
-
-        </div>
-
-
-    </div>
+<button
+    type="button"
+    class="btn-modal-confirm"
+    id="confirmDischarge"
+>
+<i class="bi bi-box-arrow-right me-1"></i>
+Continue
+</button>
 
 </div>
 
+</div>
+</div>
 
-<!-- =========================================================
-     JAVASCRIPT
-========================================================= -->
+<?php endif; ?>
+
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 
@@ -2013,280 +2661,378 @@ $totalMedication = $medStmt->fetchColumn();
 
 <script>
 
-/* =========================================================
-   DATATABLE VARIABLES
-========================================================= */
-
 let currentTable;
 let walkinTable;
 let appointmentTable;
 let diagnosedTable;
 let dischargedTable;
 
-
-/* =========================================================
-   SELECTED DATE
-========================================================= */
-
 let selectedRecordDate = '';
+let selectedDischargeURL = null;
 
 
 /* =========================================================
-   DATATABLES
+   GLOBAL DATE FILTER
 ========================================================= */
 
-$(document).ready(function () {
+$.fn.dataTable.ext.search.push(
 
+function(
+    settings,
+    data,
+    dataIndex
+)
+{
 
-    /* =====================================================
-       CURRENT TABLE
-    ===================================================== */
+    if (!selectedRecordDate) {
+        return true;
+    }
 
-    currentTable = $('#currentTable').DataTable({
-
-        pageLength: 10,
-
-        lengthMenu: [
-            [10, 25, 50, 100],
-            [10, 25, 50, 100]
-        ],
-
-        order: [[3, 'desc']],
-
-        columnDefs: [
-
-            {
-                orderable: false,
-                targets: 4
-            }
-
-        ]
-
-    });
-
-
-    /* =====================================================
-       WALK-IN TABLE
-    ===================================================== */
-
-    walkinTable = $('#walkinTable').DataTable({
-
-        pageLength: 10,
-
-        lengthMenu: [
-            [10, 25, 50, 100],
-            [10, 25, 50, 100]
-        ],
-
-        order: [[1, 'desc']]
-
-    });
-
-
-    /* =====================================================
-       APPOINTMENT TABLE
-    ===================================================== */
-
-    appointmentTable = $('#appointmentTable').DataTable({
-
-        pageLength: 10,
-
-        lengthMenu: [
-            [10, 25, 50, 100],
-            [10, 25, 50, 100]
-        ],
-
-        order: [[1, 'desc']]
-
-    });
-
-
-    /* =====================================================
-       DIAGNOSED TABLE
-    ===================================================== */
-
-    diagnosedTable = $('#diagnosedTable').DataTable({
-
-        pageLength: 10,
-
-        lengthMenu: [
-            [10, 25, 50, 100],
-            [10, 25, 50, 100]
-        ],
-
-        order: [[2, 'desc']]
-
-    });
-
-
-    /* =====================================================
-       DISCHARGED TABLE
-    ===================================================== */
-
-    dischargedTable = $('#dischargedTable').DataTable({
-
-        pageLength: 10,
-
-        lengthMenu: [
-            [10, 25, 50, 100],
-            [10, 25, 50, 100]
-        ],
-
-        order: [[2, 'desc']],
-
-        columnDefs: [
-
-            {
-                orderable: false,
-                targets: 4
-            }
-
-        ]
-
-    });
-
-
-    /* =====================================================
-       DATE FILTER
-    ===================================================== */
-
-    $.fn.dataTable.ext.search.push(
-        function (
-            settings,
-            data,
+    const row =
+        settings
+        .aoData[
             dataIndex
-        ) {
+        ]
+        .nTr;
 
-            /*
-             * If no date selected,
-             * show all records.
-             */
+    if (!row) {
+        return true;
+    }
 
-            if (!selectedRecordDate) {
+    const recordDate =
+        row.getAttribute(
+            'data-record-date'
+        )
+        ||
+        '';
 
-                return true;
-
-            }
-
-
-            /*
-             * Get current table row.
-             */
-
-            const row =
-                settings.aoData[dataIndex].nTr;
-
-
-            if (!row) {
-
-                return true;
-
-            }
-
-
-            /*
-             * Get record date from row.
-             */
-
-            const recordDate =
-                row.getAttribute(
-                    'data-record-date'
-                );
-
-
-            /*
-             * Show only matching date.
-             */
-
-            return recordDate === selectedRecordDate;
-
-        }
+    return (
+        recordDate
+        ===
+        selectedRecordDate
     );
+}
+
+);
+
+
+/* =========================================================
+   NUMBERING FUNCTION
+========================================================= */
+
+function updateTableNumbers(api)
+{
+    const info =
+        api.page.info();
+
+    api
+        .column(
+            0,
+            {
+                page:'current',
+                search:'applied',
+                order:'applied'
+            }
+        )
+        .nodes()
+        .each(
+            function(
+                cell,
+                index
+            )
+            {
+
+                cell.innerHTML =
+                    '<div class="number-circle">'
+                    +
+                    (
+                        info.start
+                        +
+                        index
+                        +
+                        1
+                    )
+                    +
+                    '</div>';
+            }
+        );
+}
+
+
+$(document).ready(function(){
 
 
     /* =====================================================
-       DATE INPUT CHANGE
+       ADMITTED
+    ===================================================== */
+
+    currentTable =
+        $('#currentTable')
+        .DataTable({
+
+            pageLength:10,
+
+            lengthMenu:[
+                [10,25,50,100],
+                [10,25,50,100]
+            ],
+
+            order:[
+                [5,'desc']
+            ],
+
+            columnDefs:[
+                {
+                    orderable:false,
+                    searchable:false,
+                    targets:0
+                },
+                {
+                    orderable:false,
+                    targets:8
+                }
+            ],
+
+            drawCallback:function()
+            {
+                updateTableNumbers(
+                    this.api()
+                );
+            }
+        });
+
+
+    /* =====================================================
+       WALK-IN
+    ===================================================== */
+
+    walkinTable =
+        $('#walkinTable')
+        .DataTable({
+
+            pageLength:10,
+
+            lengthMenu:[
+                [10,25,50,100],
+                [10,25,50,100]
+            ],
+
+            order:[
+                [2,'desc']
+            ],
+
+            columnDefs:[
+                {
+                    orderable:false,
+                    searchable:false,
+                    targets:0
+                }
+            ],
+
+            drawCallback:function()
+            {
+                updateTableNumbers(
+                    this.api()
+                );
+            }
+        });
+
+
+    /* =====================================================
+       APPOINTMENT
+    ===================================================== */
+
+    appointmentTable =
+        $('#appointmentTable')
+        .DataTable({
+
+            pageLength:10,
+
+            lengthMenu:[
+                [10,25,50,100],
+                [10,25,50,100]
+            ],
+
+            order:[
+                [2,'desc']
+            ],
+
+            columnDefs:[
+                {
+                    orderable:false,
+                    searchable:false,
+                    targets:0
+                }
+            ],
+
+            drawCallback:function()
+            {
+                updateTableNumbers(
+                    this.api()
+                );
+            }
+        });
+
+
+    /* =====================================================
+       CLINICAL RECORDS
+    ===================================================== */
+
+    diagnosedTable =
+        $('#diagnosedTable')
+        .DataTable({
+
+            pageLength:10,
+
+            lengthMenu:[
+                [10,25,50,100],
+                [10,25,50,100]
+            ],
+
+            order:[
+                [6,'desc']
+            ],
+
+            columnDefs:[
+                {
+                    orderable:false,
+                    searchable:false,
+                    targets:0
+                }
+            ],
+
+            drawCallback:function()
+            {
+                updateTableNumbers(
+                    this.api()
+                );
+            }
+        });
+
+
+    /* =====================================================
+       DISCHARGED
+    ===================================================== */
+
+    dischargedTable =
+        $('#dischargedTable')
+        .DataTable({
+
+            pageLength:10,
+
+            lengthMenu:[
+                [10,25,50,100],
+                [10,25,50,100]
+            ],
+
+            order:[
+                [6,'desc']
+            ],
+
+            columnDefs:[
+                {
+                    orderable:false,
+                    searchable:false,
+                    targets:0
+                },
+                {
+                    orderable:false,
+                    targets:9
+                }
+            ],
+
+            drawCallback:function()
+            {
+                updateTableNumbers(
+                    this.api()
+                );
+            }
+        });
+
+
+    /* =====================================================
+       DATE INPUT
     ===================================================== */
 
     $('#recordDate').on(
         'change',
-        function () {
+        function()
+        {
 
-            selectedRecordDate = this.value;
+            selectedRecordDate =
+                this.value;
 
             updateDateMessage();
-
             redrawAllTables();
-
         }
     );
 
 
     /* =====================================================
-       TODAY BUTTON
+       TODAY
     ===================================================== */
 
     $('#todayBtn').on(
         'click',
-        function () {
+        function()
+        {
 
             const today =
                 new Date();
 
-
             const year =
                 today.getFullYear();
 
-
             const month =
                 String(
-                    today.getMonth() + 1
-                ).padStart(2, '0');
-
+                    today.getMonth()
+                    +
+                    1
+                )
+                .padStart(
+                    2,
+                    '0'
+                );
 
             const day =
                 String(
                     today.getDate()
-                ).padStart(2, '0');
-
+                )
+                .padStart(
+                    2,
+                    '0'
+                );
 
             selectedRecordDate =
-                year +
-                '-' +
-                month +
-                '-' +
-                day;
+                `${year}-${month}-${day}`;
 
-
-            $('#recordDate').val(
-                selectedRecordDate
-            );
-
+            $('#recordDate')
+                .val(
+                    selectedRecordDate
+                );
 
             updateDateMessage();
-
             redrawAllTables();
-
         }
     );
 
 
     /* =====================================================
-       CLEAR DATE BUTTON
+       CLEAR DATE
     ===================================================== */
 
     $('#clearDateBtn').on(
         'click',
-        function () {
+        function()
+        {
 
             selectedRecordDate = '';
 
-            $('#recordDate').val('');
+            $('#recordDate')
+                .val('');
 
             updateDateMessage();
-
             redrawAllTables();
-
         }
     );
 
@@ -2296,46 +3042,22 @@ $(document).ready(function () {
     ===================================================== */
 
     $('#searchBox').on(
-        'keyup',
-        function () {
+        'input',
+        function()
+        {
 
-            const value =
-                this.value;
+            const table =
+                getActiveDataTable();
 
-
-            const activeTab =
-                getActiveTab();
-
-
-            if (!activeTab) {
-
+            if (!table) {
                 return;
-
             }
 
-
-            const tableElement =
-                activeTab.querySelector(
-                    'table'
-                );
-
-
-            if (!tableElement) {
-
-                return;
-
-            }
-
-
-            const tableId =
-                tableElement.id;
-
-
-            $('#' + tableId)
-                .DataTable()
-                .search(value)
+            table
+                .search(
+                    this.value
+                )
                 .draw();
-
         }
     );
 
@@ -2346,33 +3068,25 @@ $(document).ready(function () {
 
     $('#typeFilter').on(
         'change',
-        function () {
+        function()
+        {
 
-            const type =
-                this.value;
-
-
-            if (type === '') {
-
+            if (!this.value) {
                 return;
-
             }
-
 
             const target =
                 document.querySelector(
-                    '[data-bs-target="#' +
-                    type +
+                    '[data-bs-target="#'
+                    +
+                    this.value
+                    +
                     '"]'
                 );
 
-
             if (target) {
-
                 target.click();
-
             }
-
         }
     );
 
@@ -2383,88 +3097,12 @@ $(document).ready(function () {
 
     $('#sortOrder').on(
         'change',
-        function () {
-
-            const mode =
-                this.value;
-
-
-            const activeTab =
-                getActiveTab();
-
-
-            if (!activeTab) {
-
-                return;
-
-            }
-
-
-            const tableElement =
-                activeTab.querySelector(
-                    'table'
-                );
-
-
-            if (!tableElement) {
-
-                return;
-
-            }
-
-
-            const table =
-                $('#' + tableElement.id)
-                .DataTable();
-
-
-            if (mode === 'asc') {
-
-                table
-                    .order([0, 'asc'])
-                    .draw();
-
-            }
-
-
-            else if (mode === 'desc') {
-
-                table
-                    .order([0, 'desc'])
-                    .draw();
-
-            }
-
-
-            else {
-
-                const dateIndex =
-                    findDateColumn(
-                        table
-                    );
-
-
-                if (dateIndex !== -1) {
-
-                    table
-                        .order([
-                            dateIndex,
-                            mode === 'latest'
-                                ? 'desc'
-                                : 'asc'
-                        ])
-                        .draw();
-
-                }
-
-            }
-
-        }
+        applyCurrentSort
     );
 
 
     /* =====================================================
-       TAB CHANGE
+       TAB CHANGED
     ===================================================== */
 
     document
@@ -2472,105 +3110,97 @@ $(document).ready(function () {
             '[data-bs-toggle="tab"]'
         )
         .forEach(
-            function (tabButton) {
+            function(tab)
+            {
 
-                tabButton.addEventListener(
+                tab.addEventListener(
                     'shown.bs.tab',
-                    function () {
+                    function()
+                    {
 
-                        const searchValue =
-                            $('#searchBox').val();
+                        const table =
+                            getActiveDataTable();
 
-
-                        const activeTab =
-                            getActiveTab();
-
-
-                        if (!activeTab) {
-
+                        if (!table) {
                             return;
-
                         }
 
+                        table
+                            .columns
+                            .adjust();
 
-                        const tableElement =
-                            activeTab.querySelector(
-                                'table'
-                            );
-
-
-                        if (!tableElement) {
-
-                            return;
-
-                        }
-
-
-                        $('#' + tableElement.id)
-                            .DataTable()
-                            .search(searchValue)
+                        table
+                            .search(
+                                $('#searchBox')
+                                .val()
+                            )
                             .draw();
 
+                        applyCurrentSort();
                     }
                 );
-
             }
         );
 
 
     /* =====================================================
-       DISCHARGE BUTTON
+       DOWNLOAD
     ===================================================== */
+
+    $('#downloadPatientBtn').on(
+        'click',
+        downloadSelectedPatientList
+    );
+
+
+    /* =====================================================
+       DISCHARGE
+    ===================================================== */
+
+    <?php if ($role === 'admin'): ?>
 
     document
         .querySelectorAll(
             '.discharge-btn'
         )
         .forEach(
-            function (button) {
+            function(button)
+            {
 
                 button.addEventListener(
                     'click',
-                    function () {
+                    function()
+                    {
 
                         selectedDischargeURL =
-                            this.getAttribute(
-                                'data-url'
-                            );
+                            this.dataset.url;
 
-
-                        const patientName =
-                            this.getAttribute(
-                                'data-patient'
-                            );
-
-
-                        document.getElementById(
-                            'dischargeMessage'
-                        ).innerHTML =
-                            'Are you sure you want to discharge <strong>' +
+                        document
+                            .getElementById(
+                                'dischargeMessage'
+                            )
+                            .innerHTML =
+                            'Continue to discharge workflow for <strong>'
+                            +
                             escapeHtml(
-                                patientName
-                            ) +
+                                this.dataset.patient
+                            )
+                            +
                             '</strong>?';
 
-
-                        document.getElementById(
-                            'dischargeModal'
-                        ).classList.add(
-                            'show'
-                        );
-
+                        document
+                            .getElementById(
+                                'dischargeModal'
+                            )
+                            .classList
+                            .add(
+                                'show'
+                            );
                     }
                 );
-
             }
         );
 
-
-    /* =====================================================
-       CANCEL DISCHARGE
-    ===================================================== */
 
     document
         .getElementById(
@@ -2578,17 +3208,9 @@ $(document).ready(function () {
         )
         .addEventListener(
             'click',
-            function () {
-
-                closeDischargeModal();
-
-            }
+            closeDischargeModal
         );
 
-
-    /* =====================================================
-       CONFIRM DISCHARGE
-    ===================================================== */
 
     document
         .getElementById(
@@ -2596,24 +3218,17 @@ $(document).ready(function () {
         )
         .addEventListener(
             'click',
-            function () {
+            function()
+            {
 
-                if (
-                    selectedDischargeURL
-                ) {
+                if (selectedDischargeURL) {
 
                     window.location.href =
                         selectedDischargeURL;
-
                 }
-
             }
         );
 
-
-    /* =====================================================
-       CLICK OUTSIDE MODAL
-    ===================================================== */
 
     document
         .getElementById(
@@ -2621,179 +3236,61 @@ $(document).ready(function () {
         )
         .addEventListener(
             'click',
-            function (event) {
+            function(event)
+            {
 
                 if (
-                    event.target === this
+                    event.target
+                    ===
+                    this
                 ) {
 
                     closeDischargeModal();
-
                 }
-
             }
         );
 
-
-    /* =====================================================
-       ESCAPE KEY
-    ===================================================== */
-
-    document.addEventListener(
-        'keydown',
-        function (event) {
-
-            if (
-                event.key === 'Escape'
-            ) {
-
-                closeDischargeModal();
-
-            }
-
-        }
-    );
+    <?php endif; ?>
 
 });
 
 
 /* =========================================================
-   REDRAW ALL TABLES
+   GET ACTIVE TAB
 ========================================================= */
 
-function redrawAllTables()
+function getActiveTab()
 {
-
-    if (currentTable) {
-
-        currentTable.draw();
-
-    }
-
-
-    if (walkinTable) {
-
-        walkinTable.draw();
-
-    }
-
-
-    if (appointmentTable) {
-
-        appointmentTable.draw();
-
-    }
-
-
-    if (diagnosedTable) {
-
-        diagnosedTable.draw();
-
-    }
-
-
-    if (dischargedTable) {
-
-        dischargedTable.draw();
-
-    }
-
+    return document.querySelector(
+        '.tab-pane.active'
+    );
 }
 
 
 /* =========================================================
-   UPDATE DATE MESSAGE
+   GET ACTIVE DATATABLE
 ========================================================= */
 
-function updateDateMessage()
+function getActiveDataTable()
 {
+    const activeTab =
+        getActiveTab();
 
-    const message =
-        document.getElementById(
-            'dateActiveMessage'
-        );
-
-
-    const selectedText =
-        document.getElementById(
-            'selectedDateText'
-        );
-
-
-    if (
-        !selectedRecordDate
-    ) {
-
-        message.classList.remove(
-            'show'
-        );
-
-        selectedText.textContent = '';
-
-        return;
-
+    if (!activeTab) {
+        return null;
     }
 
+    const tableElement =
+        activeTab.querySelector(
+            'table'
+        );
 
-    const parts =
-        selectedRecordDate.split('-');
-
-
-    if (
-        parts.length !== 3
-    ) {
-
-        return;
-
+    if (!tableElement) {
+        return null;
     }
 
-
-    const year =
-        parts[0];
-
-
-    const month =
-        parts[1];
-
-
-    const day =
-        parts[2];
-
-
-    const monthNames = [
-        'January',
-        'February',
-        'March',
-        'April',
-        'May',
-        'June',
-        'July',
-        'August',
-        'September',
-        'October',
-        'November',
-        'December'
-    ];
-
-
-    const monthName =
-        monthNames[
-            parseInt(month, 10) - 1
-        ];
-
-
-    selectedText.textContent =
-        day +
-        ' ' +
-        monthName +
-        ' ' +
-        year;
-
-
-    message.classList.add(
-        'show'
-    );
-
+    return $('#' + tableElement.id)
+        .DataTable();
 }
 
 
@@ -2803,95 +3300,585 @@ function updateDateMessage()
 
 function findDateColumn(table)
 {
-
     let dateIndex = -1;
 
+    table
+        .columns()
+        .every(
+            function(index)
+            {
 
-    table.columns().every(
-        function (index) {
+                const header =
+                    $(this.header())
+                    .text()
+                    .trim()
+                    .toLowerCase();
 
-            const header =
-                $(this.header())
-                .text()
-                .trim()
-                .toLowerCase();
+                if (
+                    header.includes(
+                        'actual discharge'
+                    )
+                ) {
 
+                    dateIndex =
+                        index;
 
-            if (
-                header.includes('date')
-            ) {
+                    return false;
+                }
 
-                dateIndex = index;
+                if (
+                    dateIndex === -1
+                    &&
+                    (
+                        header.includes(
+                            'date'
+                        )
+                        ||
+                        header.includes(
+                            'admission'
+                        )
+                    )
+                ) {
 
+                    dateIndex =
+                        index;
+                }
             }
+        );
 
+    return dateIndex;
+}
+
+
+/* =========================================================
+   APPLY SORT
+========================================================= */
+
+function applyCurrentSort()
+{
+    const mode =
+        document
+        .getElementById(
+            'sortOrder'
+        )
+        .value;
+
+    const table =
+        getActiveDataTable();
+
+    if (!table) {
+        return;
+    }
+
+
+    if (mode === 'asc') {
+
+        table
+            .order([
+                [1,'asc']
+            ])
+            .draw();
+
+        return;
+    }
+
+
+    if (mode === 'desc') {
+
+        table
+            .order([
+                [1,'desc']
+            ])
+            .draw();
+
+        return;
+    }
+
+
+    const dateIndex =
+        findDateColumn(table);
+
+    if (dateIndex !== -1) {
+
+        table
+            .order([
+                [
+                    dateIndex,
+                    mode === 'latest'
+                    ?
+                    'desc'
+                    :
+                    'asc'
+                ]
+            ])
+            .draw();
+    }
+}
+
+
+/* =========================================================
+   REDRAW
+========================================================= */
+
+function redrawAllTables()
+{
+    currentTable?.draw();
+    walkinTable?.draw();
+    appointmentTable?.draw();
+    diagnosedTable?.draw();
+    dischargedTable?.draw();
+}
+
+
+/* =========================================================
+   DATE MESSAGE
+========================================================= */
+
+function updateDateMessage()
+{
+    const message =
+        document.getElementById(
+            'dateActiveMessage'
+        );
+
+    const selectedText =
+        document.getElementById(
+            'selectedDateText'
+        );
+
+    if (
+        !message ||
+        !selectedText
+    ) {
+        return;
+    }
+
+    if (!selectedRecordDate) {
+
+        message
+            .classList
+            .remove(
+                'show'
+            );
+
+        return;
+    }
+
+    const parts =
+        selectedRecordDate
+        .split('-');
+
+    if (
+        parts.length !== 3
+    ) {
+        return;
+    }
+
+    const dateObject =
+        new Date(
+            Number(parts[0]),
+            Number(parts[1]) - 1,
+            Number(parts[2])
+        );
+
+    selectedText.textContent =
+        dateObject.toLocaleDateString(
+            'en-GB',
+            {
+                day:'2-digit',
+                month:'long',
+                year:'numeric'
+            }
+        );
+
+    message
+        .classList
+        .add(
+            'show'
+        );
+}
+
+
+/* =========================================================
+   DOWNLOAD
+========================================================= */
+
+function downloadSelectedPatientList()
+{
+    const activeTab =
+        getActiveTab();
+
+    if (!activeTab) {
+        return;
+    }
+
+    const tableElement =
+        activeTab.querySelector(
+            'table'
+        );
+
+    if (!tableElement) {
+        return;
+    }
+
+    const table =
+        $('#' + tableElement.id)
+        .DataTable();
+
+    const headers = [];
+
+
+    $(tableElement)
+        .find('thead th')
+        .each(
+            function()
+            {
+
+                const heading =
+                    $(this)
+                    .text()
+                    .replace(
+                        /\s+/g,
+                        ' '
+                    )
+                    .trim();
+
+                const lower =
+                    heading
+                    .toLowerCase();
+
+                if (
+                    lower !== 'action'
+                    &&
+                    lower !== 'no.'
+                ) {
+
+                    headers.push(
+                        heading
+                    );
+                }
+            }
+        );
+
+
+    const rows = [];
+
+
+    table
+        .rows({
+            search:'applied',
+            order:'applied'
+        })
+        .every(
+            function()
+            {
+
+                const node =
+                    this.node();
+
+                if (!node) {
+                    return;
+                }
+
+                const recordDate =
+                    node.getAttribute(
+                        'data-record-date'
+                    )
+                    ||
+                    '';
+
+                if (
+                    selectedRecordDate
+                    &&
+                    recordDate
+                    !==
+                    selectedRecordDate
+                ) {
+                    return;
+                }
+
+                const rowData = [];
+
+
+                $(node)
+                    .find('td')
+                    .each(
+                        function(index)
+                        {
+
+                            const heading =
+                                $(tableElement)
+                                .find('thead th')
+                                .eq(index)
+                                .text()
+                                .replace(
+                                    /\s+/g,
+                                    ' '
+                                )
+                                .trim()
+                                .toLowerCase();
+
+                            if (
+                                heading === 'action'
+                                ||
+                                heading === 'no.'
+                            ) {
+                                return;
+                            }
+
+                            rowData.push(
+                                $(this)
+                                .text()
+                                .replace(
+                                    /\s+/g,
+                                    ' '
+                                )
+                                .trim()
+                            );
+                        }
+                    );
+
+                rows.push(
+                    rowData
+                );
+            }
+        );
+
+
+    if (
+        rows.length === 0
+    ) {
+
+        alert(
+            'No patient records found.'
+        );
+
+        return;
+    }
+
+
+    const csvRows = [];
+
+    csvRows.push(
+        escapeCSV(
+            'ZB-CARE Patient List'
+        )
+    );
+
+    csvRows.push(
+        escapeCSV(
+            'Category: '
+            +
+            getCategoryName(
+                activeTab.id
+            )
+        )
+    );
+
+    csvRows.push(
+        escapeCSV(
+            'Date: '
+            +
+            (
+                selectedRecordDate
+                ||
+                'All Records'
+            )
+        )
+    );
+
+    csvRows.push('');
+
+    csvRows.push(
+        headers
+        .map(
+            escapeCSV
+        )
+        .join(',')
+    );
+
+
+    rows.forEach(
+        function(row)
+        {
+
+            csvRows.push(
+                row
+                .map(
+                    escapeCSV
+                )
+                .join(',')
+            );
         }
     );
 
 
-    return dateIndex;
+    const blob =
+        new Blob(
+            [
+                '\uFEFF'
+                +
+                csvRows.join(
+                    '\r\n'
+                )
+            ],
+            {
+                type:
+                    'text/csv;charset=utf-8;'
+            }
+        );
 
+
+    const url =
+        URL.createObjectURL(
+            blob
+        );
+
+
+    const link =
+        document.createElement(
+            'a'
+        );
+
+
+    link.href =
+        url;
+
+
+    link.download =
+        'ZB-CARE-Patient-'
+        +
+        activeTab.id
+        +
+        '-'
+        +
+        (
+            selectedRecordDate
+            ||
+            'ALL'
+        )
+        +
+        '.csv';
+
+
+    document.body
+        .appendChild(
+            link
+        );
+
+
+    link.click();
+
+
+    link.remove();
+
+
+    URL.revokeObjectURL(
+        url
+    );
 }
 
 
 /* =========================================================
-   GET ACTIVE TAB
+   CATEGORY NAME
 ========================================================= */
 
-function getActiveTab()
+function getCategoryName(tabId)
 {
+    const names = {
 
-    return document.querySelector(
-        '.tab-pane.active'
+        current:
+            'Admitted Patients',
+
+        walkin:
+            'Walk-In Patients',
+
+        appointment:
+            'Appointments',
+
+        diagnosed:
+            'Clinical Records',
+
+        discharged:
+            'Discharged Patients'
+
+    };
+
+    return (
+        names[tabId]
+        ||
+        'Patient Records'
     );
-
 }
 
 
 /* =========================================================
-   CLOSE DISCHARGE MODAL
+   CSV
+========================================================= */
+
+function escapeCSV(value)
+{
+    return '"'
+        +
+        String(
+            value
+            ??
+            ''
+        )
+        .replace(
+            /"/g,
+            '""'
+        )
+        +
+        '"';
+}
+
+
+/* =========================================================
+   CLOSE MODAL
 ========================================================= */
 
 function closeDischargeModal()
 {
-
-    document
-        .getElementById(
+    const modal =
+        document.getElementById(
             'dischargeModal'
-        )
-        .classList.remove(
-            'show'
         );
 
+    if (modal) {
 
-    selectedDischargeURL = null;
+        modal
+            .classList
+            .remove(
+                'show'
+            );
+    }
 
+    selectedDischargeURL =
+        null;
 }
 
 
 /* =========================================================
-   HTML ESCAPE
+   ESCAPE HTML
 ========================================================= */
 
 function escapeHtml(text)
 {
-
     const div =
         document.createElement(
             'div'
         );
 
-
-    div.textContent = text;
-
+    div.textContent =
+        text
+        ??
+        '';
 
     return div.innerHTML;
-
 }
 
 </script>
 
-
 </body>
-
 </html>

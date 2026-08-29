@@ -13,7 +13,6 @@ $current = basename($_SERVER['PHP_SELF']);
 
 /* =========================================================
    SIDEBAR
-   STANDARD SIZE = 260PX
 ========================================================= */
 
 .sidebar{
@@ -28,69 +27,112 @@ $current = basename($_SERVER['PHP_SELF']);
     height:100vh;
     min-height:100vh;
 
-    background:linear-gradient(
-        180deg,
-        #0f172a 0%,
-        #1e293b 100%
-    );
-
-    color:white;
-
-    box-shadow:
-        0 0 30px rgba(0,0,0,.15);
-
     position:fixed;
 
     top:0;
     left:0;
 
+    z-index:1000;
+
     overflow-y:auto;
     overflow-x:hidden;
 
-    z-index:1000;
-
     box-sizing:border-box;
+
+    background:
+        linear-gradient(
+            180deg,
+            #0f172a 0%,
+            #172033 50%,
+            #1e293b 100%
+        );
+
+    color:#fff;
+
+    border-right:
+        1px solid
+        rgba(255,255,255,.05);
+
+    box-shadow:
+        8px 0 24px
+        rgba(15,23,42,.08);
 }
 
 
 /* =========================================================
-   SYSTEM LOGO
+   INNER WRAPPER
+========================================================= */
+
+.sidebar-inner{
+
+    min-height:100%;
+
+    padding:20px 14px;
+
+    display:flex;
+
+    flex-direction:column;
+}
+
+
+/* =========================================================
+   LOGO
 ========================================================= */
 
 .system-logo{
 
-    text-align:center;
+    display:flex;
+
+    align-items:center;
+
+    justify-content:center;
+
+    gap:8px;
+
+    margin-bottom:20px;
+
+    color:#fff;
+
+    font-size:20px;
 
     font-weight:700;
 
-    font-size:22px;
+    letter-spacing:.2px;
+}
 
-    margin-bottom:25px;
 
-    color:white;
+.system-logo i{
+
+    color:#60a5fa;
+
+    font-size:20px;
 }
 
 
 /* =========================================================
-   PROFILE CARD
+   PROFILE
 ========================================================= */
 
 .profile-card{
 
+    margin-bottom:22px;
+
+    padding:16px;
+
+    display:flex;
+
+    align-items:center;
+
+    gap:12px;
+
     background:
-        rgba(255,255,255,.08);
+        rgba(255,255,255,.05);
 
     border:
         1px solid
-        rgba(255,255,255,.08);
+        rgba(255,255,255,.07);
 
-    border-radius:20px;
-
-    padding:20px;
-
-    text-align:center;
-
-    margin-bottom:25px;
+    border-radius:14px;
 }
 
 
@@ -100,14 +142,10 @@ $current = basename($_SERVER['PHP_SELF']);
 
 .profile-icon{
 
-    width:90px;
-    height:90px;
+    width:52px;
+    height:52px;
 
-    margin:auto;
-
-    border-radius:50%;
-
-    background:white;
+    min-width:52px;
 
     display:flex;
 
@@ -115,126 +153,121 @@ $current = basename($_SERVER['PHP_SELF']);
 
     justify-content:center;
 
-    font-size:45px;
+    background:
+        rgba(59,130,246,.14);
 
-    color:#3b82f6;
+    border:
+        1px solid
+        rgba(96,165,250,.18);
 
-    box-shadow:
-        0 8px 20px
-        rgba(0,0,0,.25);
+    border-radius:12px;
+
+    color:#93c5fd;
+
+    font-size:24px;
 }
 
 
 /* =========================================================
-   PROFILE NAME
+   PROFILE INFO
 ========================================================= */
+
+.profile-info{
+
+    min-width:0;
+}
+
 
 .profile-name{
 
-    font-weight:700;
+    margin:0;
 
-    margin-top:15px;
+    color:#f8fafc;
 
-    margin-bottom:3px;
+    font-size:14px;
+
+    font-weight:650;
 }
 
-
-/* =========================================================
-   PROFILE ROLE
-========================================================= */
 
 .profile-role{
 
-    color:#cbd5e1;
-
-    font-size:13px;
-}
-
-
-/* =========================================================
-   SIDEBAR TITLE
-========================================================= */
-
-.sidebar-title{
+    margin-top:2px;
 
     color:#94a3b8;
 
     font-size:11px;
-
-    text-transform:uppercase;
-
-    letter-spacing:2px;
-
-    margin-top:15px;
-
-    margin-bottom:10px;
-
-    padding-left:8px;
 }
 
 
 /* =========================================================
-   NAVIGATION
+   MENU TITLE
+========================================================= */
+
+.sidebar-title{
+
+    margin-top:3px;
+
+    margin-bottom:9px;
+
+    padding-left:11px;
+
+    color:#64748b;
+
+    font-size:9px;
+
+    font-weight:700;
+
+    text-transform:uppercase;
+
+    letter-spacing:1.8px;
+}
+
+
+/* =========================================================
+   NAV LINKS
 ========================================================= */
 
 .sidebar .nav-link{
 
-    color:#e2e8f0;
+    min-height:43px;
 
-    padding:13px 15px;
+    margin-bottom:5px;
 
-    margin-bottom:8px;
-
-    border-radius:14px;
+    padding:10px 12px;
 
     display:flex;
 
     align-items:center;
 
+    border-radius:9px;
+
+    color:#cbd5e1;
+
     text-decoration:none;
 
-    transition:.3s;
-
-    font-size:15px;
+    font-size:13px;
 
     font-weight:500;
+
+    transition:
+        background .18s ease,
+        color .18s ease,
+        transform .18s ease;
 
     white-space:nowrap;
 }
 
 
 /* =========================================================
-   NAVIGATION HOVER
+   NAV CONTENT
 ========================================================= */
 
-.sidebar .nav-link:hover{
+.sidebar .nav-link span{
 
-    background:
-        rgba(59,130,246,.15);
+    display:flex;
 
-    color:white;
-
-    transform:translateX(4px);
-}
-
-
-/* =========================================================
-   ACTIVE NAVIGATION
-========================================================= */
-
-.sidebar .nav-link.active{
-
-    background:linear-gradient(
-        135deg,
-        #2563eb,
-        #3b82f6
-    );
-
-    color:white;
-
-    box-shadow:
-        0 8px 20px
-        rgba(37,99,235,.35);
+    align-items:center;
 }
 
 
@@ -246,27 +279,140 @@ $current = basename($_SERVER['PHP_SELF']);
 
     width:22px;
 
-    margin-right:12px;
+    margin-right:9px;
 
-    text-align:center;
+    display:inline-flex;
+
+    align-items:center;
+
+    justify-content:center;
+
+    color:#94a3b8;
+
+    font-size:15px;
+
+    transition:.18s;
 }
 
 
 /* =========================================================
-   LOGOUT
+   HOVER
 ========================================================= */
 
-.logout{
+.sidebar .nav-link:hover{
 
-    color:#f87171 !important;
+    background:
+        rgba(255,255,255,.06);
+
+    color:#fff;
+
+    transform:
+        translateX(2px);
 }
 
 
-.logout:hover{
+.sidebar .nav-link:hover
+.menu-icon{
+
+    color:#bfdbfe;
+}
+
+
+/* =========================================================
+   ACTIVE
+========================================================= */
+
+.sidebar .nav-link.active{
 
     background:
-        rgba(239,68,68,.15)
-        !important;
+        rgba(37,99,235,.16);
+
+    border:
+        1px solid
+        rgba(96,165,250,.16);
+
+    color:#fff;
+
+    font-weight:600;
+
+    box-shadow:none;
+}
+
+
+.sidebar .nav-link.active
+.menu-icon{
+
+    color:#60a5fa;
+}
+
+
+/* =========================================================
+   DIVIDER
+========================================================= */
+
+.sidebar-divider{
+
+    margin:14px 7px;
+
+    border:0;
+
+    border-top:
+        1px solid
+        rgba(255,255,255,.07);
+
+    opacity:1;
+}
+
+
+/* =========================================================
+   LOGOUT SECTION
+========================================================= */
+
+.logout-wrapper{
+
+    margin-top:auto;
+
+    padding-top:18px;
+}
+
+
+.sidebar .logout{
+
+    color:#fca5a5;
+}
+
+
+.sidebar .logout
+.menu-icon{
+
+    color:#f87171;
+}
+
+
+.sidebar .logout:hover{
+
+    background:
+        rgba(239,68,68,.08);
+
+    color:#fecaca;
+
+    transform:none;
+}
+
+
+/* =========================================================
+   VERSION
+========================================================= */
+
+.sidebar-version{
+
+    margin-top:12px;
+
+    color:#475569;
+
+    font-size:9px;
+
+    text-align:center;
 }
 
 
@@ -276,21 +422,20 @@ $current = basename($_SERVER['PHP_SELF']);
 
 .sidebar::-webkit-scrollbar{
 
-    width:6px;
+    width:5px;
 }
 
 
 .sidebar::-webkit-scrollbar-track{
 
-    background:
-        rgba(255,255,255,.03);
+    background:transparent;
 }
 
 
 .sidebar::-webkit-scrollbar-thumb{
 
     background:
-        rgba(148,163,184,.35);
+        rgba(148,163,184,.20);
 
     border-radius:10px;
 }
@@ -299,7 +444,48 @@ $current = basename($_SERVER['PHP_SELF']);
 .sidebar::-webkit-scrollbar-thumb:hover{
 
     background:
-        rgba(148,163,184,.55);
+        rgba(148,163,184,.35);
+}
+
+
+/* =========================================================
+   PAGE CONTENT SUPPORT
+
+   If page uses normal layout, this prevents content
+   from going underneath the fixed sidebar.
+========================================================= */
+
+body > .d-flex > .flex-grow-1,
+body > .d-flex > .content,
+body > .d-flex > .main-content{
+
+    margin-left:260px;
+}
+
+
+/* =========================================================
+   RESPONSIVE
+========================================================= */
+
+@media(max-width:900px){
+
+    .sidebar{
+
+        width:230px !important;
+        min-width:230px !important;
+        max-width:230px !important;
+
+        flex-basis:230px !important;
+    }
+
+
+    body > .d-flex > .flex-grow-1,
+    body > .d-flex > .content,
+    body > .d-flex > .main-content{
+
+        margin-left:230px;
+    }
+
 }
 
 </style>
@@ -312,7 +498,7 @@ $current = basename($_SERVER['PHP_SELF']);
 <div class="sidebar">
 
 
-<div class="p-3">
+<div class="sidebar-inner">
 
 
 <!-- =====================================================
@@ -321,11 +507,14 @@ $current = basename($_SERVER['PHP_SELF']);
 
 <div class="system-logo">
 
-    <i class="bi bi-heart-pulse-fill"></i>
+<i class="bi bi-heart-pulse-fill"></i>
 
-    ZB-CARE
+<span>
+ZB-CARE
+</span>
 
 </div>
+
 
 
 <!-- =====================================================
@@ -335,28 +524,35 @@ $current = basename($_SERVER['PHP_SELF']);
 <div class="profile-card">
 
 
-    <div class="profile-icon">
+<div class="profile-icon">
 
-        <i class="bi bi-person-heart"></i>
+<i class="bi bi-person-heart"></i>
 
-    </div>
-
-
-    <div class="profile-name">
-
-        Nurse
-
-    </div>
+</div>
 
 
-    <div class="profile-role">
+<div class="profile-info">
 
-        Patient Care Staff
 
-    </div>
+<div class="profile-name">
+
+Nurse
+
+</div>
+
+
+<div class="profile-role">
+
+Patient Care Staff
+
+</div>
 
 
 </div>
+
+
+</div>
+
 
 
 <!-- =====================================================
@@ -365,9 +561,10 @@ $current = basename($_SERVER['PHP_SELF']);
 
 <div class="sidebar-title">
 
-    Main Menu
+Main Menu
 
 </div>
+
 
 
 <!-- =====================================================
@@ -376,23 +573,34 @@ $current = basename($_SERVER['PHP_SELF']);
 
 <a
     href="../pages/nurse_dashboard.php"
+
     class="
         nav-link
-        <?= ($current == 'nurse_dashboard.php')
-            ? 'active'
-            : '' ?>
+        <?= (
+            $current
+            ===
+            'nurse_dashboard.php'
+        )
+        ?
+        'active'
+        :
+        ''
+        ?>
     "
 >
 
-    <span>
 
-        <i class="bi bi-speedometer2 menu-icon"></i>
+<span>
 
-        Dashboard
+<i class="bi bi-grid-1x2 menu-icon"></i>
 
-    </span>
+Dashboard
+
+</span>
+
 
 </a>
+
 
 
 <!-- =====================================================
@@ -401,23 +609,34 @@ $current = basename($_SERVER['PHP_SELF']);
 
 <a
     href="../pages/nurse_patients.php"
+
     class="
         nav-link
-        <?= ($current == 'nurse_patients.php')
-            ? 'active'
-            : '' ?>
+        <?= (
+            $current
+            ===
+            'nurse_patients.php'
+        )
+        ?
+        'active'
+        :
+        ''
+        ?>
     "
 >
 
-    <span>
 
-        <i class="bi bi-people-fill menu-icon"></i>
+<span>
 
-        Patients
+<i class="bi bi-people menu-icon"></i>
 
-    </span>
+Patients
+
+</span>
+
 
 </a>
+
 
 
 <!-- =====================================================
@@ -426,51 +645,77 @@ $current = basename($_SERVER['PHP_SELF']);
 
 <a
     href="../pages/nurse_medication.php"
+
     class="
         nav-link
-        <?= ($current == 'nurse_medication.php')
-            ? 'active'
-            : '' ?>
+        <?= (
+            $current
+            ===
+            'nurse_medication.php'
+        )
+        ?
+        'active'
+        :
+        ''
+        ?>
     "
 >
 
-    <span>
 
-        <i class="bi bi-capsule-pill menu-icon"></i>
+<span>
 
-        Medication
+<i class="bi bi-capsule menu-icon"></i>
 
-    </span>
+Medication
+
+</span>
+
 
 </a>
 
 
-<hr
-    style="
-        border-color:
-        rgba(255,255,255,.15);
-    "
->
+
+<!-- =====================================================
+     DIVIDER
+===================================================== -->
+
+<hr class="sidebar-divider">
+
 
 
 <!-- =====================================================
      LOGOUT
 ===================================================== -->
 
+<div class="logout-wrapper">
+
+
 <a
     href="../auth/logout.php"
     class="nav-link logout"
 >
 
-    <span>
 
-        <i class="bi bi-box-arrow-right menu-icon"></i>
+<span>
 
-        Logout
+<i class="bi bi-box-arrow-right menu-icon"></i>
 
-    </span>
+Logout
+
+</span>
+
 
 </a>
+
+
+<div class="sidebar-version">
+
+ZB-CARE Nurse Portal
+
+</div>
+
+
+</div>
 
 
 </div>

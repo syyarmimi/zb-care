@@ -2,7 +2,7 @@
 
 $dsn = "odbc:OracleODBC";
 $username = "SYARMIMI";
-$password = "zaipolbahari";
+$password = "ZbCareDb#2026";
 
 try {
     $conn = new PDO($dsn, $username, $password);

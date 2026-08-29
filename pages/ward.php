@@ -1,26 +1,55 @@
 <?php
+
 session_start();
 
-if (!isset($_SESSION['role']) || $_SESSION['role'] !== 'admin') {
+if (
+    !isset($_SESSION['role']) ||
+    $_SESSION['role'] !== 'admin'
+) {
     header("Location: ../auth/login.php");
     exit();
 }
 
 include("../config/config.php");
 
-/*
-|--------------------------------------------------------------------------
-| HELPER
-|--------------------------------------------------------------------------
-*/
 
-function redirectWard($ward = 'All', $message = '', $type = 'success')
+/* =========================================================
+   SAFE OUTPUT
+========================================================= */
+
+function h($value)
 {
-    $url = 'ward.php?ward=' . urlencode($ward);
+    return htmlspecialchars(
+        (string)($value ?? ''),
+        ENT_QUOTES,
+        'UTF-8'
+    );
+}
+
+
+/* =========================================================
+   REDIRECT HELPER
+========================================================= */
+
+function redirectWard(
+    $ward = 'All',
+    $message = '',
+    $type = 'success'
+) {
+
+    $url =
+        'ward.php?ward=' .
+        urlencode($ward);
 
     if ($message !== '') {
-        $url .= '&msg=' . urlencode($message);
-        $url .= '&type=' . urlencode($type);
+
+        $url .=
+            '&msg=' .
+            urlencode($message);
+
+        $url .=
+            '&type=' .
+            urlencode($type);
     }
 
     header("Location: " . $url);
@@ -28,30 +57,33 @@ function redirectWard($ward = 'All', $message = '', $type = 'success')
 }
 
 
-/*
-|--------------------------------------------------------------------------
-| CURRENT WARD FILTER
-|--------------------------------------------------------------------------
-*/
+/* =========================================================
+   CURRENT WARD FILTER
+========================================================= */
 
-$ward_id = $_GET['ward'] ?? 'All';
+$ward_id =
+    $_GET['ward']
+    ?? 'All';
 
 
-/*
-|--------------------------------------------------------------------------
-| DELETE BED
-|--------------------------------------------------------------------------
-| IMPORTANT:
-| Delete is now POST instead of GET.
-|--------------------------------------------------------------------------
-*/
+/* =========================================================
+   DELETE BED
+========================================================= */
 
 if (isset($_POST['delete_bed'])) {
 
-    $bed_id = trim($_POST['delete_bed']);
-    $current_ward = $_POST['current_ward'] ?? 'All';
+    $bed_id =
+        trim(
+            $_POST['delete_bed']
+        );
+
+    $current_ward =
+        $_POST['current_ward']
+        ?? 'All';
+
 
     if ($bed_id === '') {
+
         redirectWard(
             $current_ward,
             'Invalid bed selected.',
@@ -59,29 +91,42 @@ if (isset($_POST['delete_bed'])) {
         );
     }
 
+
     try {
 
-        /*
-        |--------------------------------------------------------------------------
-        | Check whether bed exists
-        |--------------------------------------------------------------------------
-        */
+        /* =================================================
+           CHECK BED
+        ================================================= */
 
-        $checkBed = $conn->prepare("
-            SELECT
-                BED_ID,
-                BED_NUMBER,
-                STATUS,
-                WARD_ID
-            FROM SYARMIMI.BED
-            WHERE BED_ID = :bed_id
-        ");
+        $checkBed =
+            $conn->prepare("
+
+                SELECT
+                    BED_ID,
+                    BED_NUMBER,
+                    STATUS,
+                    WARD_ID
+
+                FROM
+                    SYARMIMI.BED
+
+                WHERE
+                    BED_ID = :bed_id
+
+            ");
+
 
         $checkBed->execute([
-            ':bed_id' => $bed_id
+            ':bed_id' =>
+                $bed_id
         ]);
 
-        $bed = $checkBed->fetch(PDO::FETCH_ASSOC);
+
+        $bed =
+            $checkBed->fetch(
+                PDO::FETCH_ASSOC
+            );
+
 
         if (!$bed) {
 
@@ -93,13 +138,19 @@ if (isset($_POST['delete_bed'])) {
         }
 
 
-        /*
-        |--------------------------------------------------------------------------
-        | Cannot delete occupied bed
-        |--------------------------------------------------------------------------
-        */
+        /* =================================================
+           OCCUPIED BED CANNOT DELETE
+        ================================================= */
 
-        if (strtolower(trim($bed['STATUS'])) === 'occupied') {
+        if (
+            strtolower(
+                trim(
+                    $bed['STATUS']
+                )
+            )
+            ===
+            'occupied'
+        ) {
 
             redirectWard(
                 $current_ward,
@@ -109,39 +160,46 @@ if (isset($_POST['delete_bed'])) {
         }
 
 
-        /*
-        |--------------------------------------------------------------------------
-        | Check admission history
-        |--------------------------------------------------------------------------
-        |
-        | Even if the bed is currently Available, an old ADMISSION record
-        | may still reference this BED_ID.
-        |
-        | Deleting it would cause:
-        | ORA-02292: integrity constraint violated
-        |
-        */
+        /* =================================================
+           CHECK ADMISSION HISTORY
+        ================================================= */
 
-        $historyCheck = $conn->prepare("
-            SELECT COUNT(*) AS TOTAL_HISTORY
-            FROM SYARMIMI.ADMISSION
-            WHERE BED_ID = :bed_id
-        ");
+        $historyCheck =
+            $conn->prepare("
+
+                SELECT
+                    COUNT(*)
+                    AS TOTAL_HISTORY
+
+                FROM
+                    SYARMIMI.ADMISSION
+
+                WHERE
+                    BED_ID = :bed_id
+
+            ");
+
 
         $historyCheck->execute([
-            ':bed_id' => $bed_id
+            ':bed_id' =>
+                $bed_id
         ]);
 
-        $history = $historyCheck->fetch(PDO::FETCH_ASSOC);
 
-        $totalHistory = (int)($history['TOTAL_HISTORY'] ?? 0);
+        $history =
+            $historyCheck->fetch(
+                PDO::FETCH_ASSOC
+            );
 
 
-        /*
-        |--------------------------------------------------------------------------
-        | If bed has history, don't delete
-        |--------------------------------------------------------------------------
-        */
+        $totalHistory =
+            (int)(
+                $history[
+                    'TOTAL_HISTORY'
+                ]
+                ?? 0
+            );
+
 
         if ($totalHistory > 0) {
 
@@ -153,31 +211,33 @@ if (isset($_POST['delete_bed'])) {
         }
 
 
-        /*
-        |--------------------------------------------------------------------------
-        | Delete bed
-        |--------------------------------------------------------------------------
-        */
+        /* =================================================
+           DELETE BED
+        ================================================= */
 
-        $delete = $conn->prepare("
-            DELETE FROM SYARMIMI.BED
-            WHERE BED_ID = :bed_id
-        ");
+        $delete =
+            $conn->prepare("
+
+                DELETE FROM
+                    SYARMIMI.BED
+
+                WHERE
+                    BED_ID = :bed_id
+
+            ");
+
 
         $delete->execute([
-            ':bed_id' => $bed_id
+            ':bed_id' =>
+                $bed_id
         ]);
 
 
-        /*
-        |--------------------------------------------------------------------------
-        | Redirect after successful deletion
-        |--------------------------------------------------------------------------
-        */
-
         redirectWard(
             $current_ward,
-            'Bed ' . $bed['BED_NUMBER'] . ' has been deleted successfully.',
+            'Bed ' .
+            $bed['BED_NUMBER'] .
+            ' has been deleted successfully.',
             'success'
         );
 
@@ -193,19 +253,34 @@ if (isset($_POST['delete_bed'])) {
 }
 
 
-/*
-|--------------------------------------------------------------------------
-| TRANSFER PATIENT
-|--------------------------------------------------------------------------
-*/
+/* =========================================================
+   TRANSFER PATIENT
+========================================================= */
 
 if (isset($_POST['transfer'])) {
 
-    $admission_id = trim($_POST['admission_id'] ?? '');
-    $new_bed      = trim($_POST['new_bed'] ?? '');
-    $current_ward = $_POST['current_ward'] ?? 'All';
+    $admission_id =
+        trim(
+            $_POST['admission_id']
+            ?? ''
+        );
 
-    if ($admission_id === '' || $new_bed === '') {
+    $new_bed =
+        trim(
+            $_POST['new_bed']
+            ?? ''
+        );
+
+    $current_ward =
+        $_POST['current_ward']
+        ?? 'All';
+
+
+    if (
+        $admission_id === ''
+        ||
+        $new_bed === ''
+    ) {
 
         redirectWard(
             $current_ward,
@@ -214,31 +289,49 @@ if (isset($_POST['transfer'])) {
         );
     }
 
+
     try {
 
         $conn->beginTransaction();
 
 
-        /*
-        |--------------------------------------------------------------------------
-        | Get current admission + old bed
-        |--------------------------------------------------------------------------
-        */
+        /* =================================================
+           CURRENT ADMISSION
+        ================================================= */
 
-        $stmt = $conn->prepare("
-            SELECT
-                ADMISSION_ID,
-                BED_ID
-            FROM SYARMIMI.ADMISSION
-            WHERE ADMISSION_ID = :admission_id
-              AND DISCHARGE_DATE IS NULL
-        ");
+        $stmt =
+            $conn->prepare("
+
+                SELECT
+                    ADMISSION_ID,
+                    BED_ID
+
+                FROM
+                    SYARMIMI.ADMISSION
+
+                WHERE
+                    ADMISSION_ID =
+                    :admission_id
+
+                AND
+                    DISCHARGE_DATE
+                    IS NULL
+
+                FOR UPDATE
+
+            ");
+
 
         $stmt->execute([
-            ':admission_id' => $admission_id
+            ':admission_id' =>
+                $admission_id
         ]);
 
-        $old = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        $old =
+            $stmt->fetch(
+                PDO::FETCH_ASSOC
+            );
 
 
         if (!$old) {
@@ -253,27 +346,40 @@ if (isset($_POST['transfer'])) {
         }
 
 
-        /*
-        |--------------------------------------------------------------------------
-        | Check new bed
-        |--------------------------------------------------------------------------
-        */
+        /* =================================================
+           CHECK NEW BED
+        ================================================= */
 
-        $newBedCheck = $conn->prepare("
-            SELECT
-                BED_ID,
-                BED_NUMBER,
-                STATUS
-            FROM SYARMIMI.BED
-            WHERE BED_ID = :bed_id
-            FOR UPDATE
-        ");
+        $newBedCheck =
+            $conn->prepare("
+
+                SELECT
+                    BED_ID,
+                    BED_NUMBER,
+                    STATUS
+
+                FROM
+                    SYARMIMI.BED
+
+                WHERE
+                    BED_ID =
+                    :bed_id
+
+                FOR UPDATE
+
+            ");
+
 
         $newBedCheck->execute([
-            ':bed_id' => $new_bed
+            ':bed_id' =>
+                $new_bed
         ]);
 
-        $newBedData = $newBedCheck->fetch(PDO::FETCH_ASSOC);
+
+        $newBedData =
+            $newBedCheck->fetch(
+                PDO::FETCH_ASSOC
+            );
 
 
         if (!$newBedData) {
@@ -288,13 +394,17 @@ if (isset($_POST['transfer'])) {
         }
 
 
-        /*
-        |--------------------------------------------------------------------------
-        | New bed must be available
-        |--------------------------------------------------------------------------
-        */
-
-        if ($newBedData['STATUS'] !== 'Available') {
+        if (
+            strtolower(
+                trim(
+                    $newBedData[
+                        'STATUS'
+                    ]
+                )
+            )
+            !==
+            'available'
+        ) {
 
             $conn->rollBack();
 
@@ -306,13 +416,11 @@ if (isset($_POST['transfer'])) {
         }
 
 
-        /*
-        |--------------------------------------------------------------------------
-        | Do not transfer to same bed
-        |--------------------------------------------------------------------------
-        */
-
-        if ((string)$old['BED_ID'] === (string)$new_bed) {
+        if (
+            (string)$old['BED_ID']
+            ===
+            (string)$new_bed
+        ) {
 
             $conn->rollBack();
 
@@ -324,55 +432,87 @@ if (isset($_POST['transfer'])) {
         }
 
 
-        /*
-        |--------------------------------------------------------------------------
-        | Update admission
-        |--------------------------------------------------------------------------
-        */
+        /* =================================================
+           UPDATE ADMISSION
+        ================================================= */
 
-        $updateAdmission = $conn->prepare("
-            UPDATE SYARMIMI.ADMISSION
-            SET BED_ID = :new_bed
-            WHERE ADMISSION_ID = :admission_id
-        ");
+        $updateAdmission =
+            $conn->prepare("
+
+                UPDATE
+                    SYARMIMI.ADMISSION
+
+                SET
+                    BED_ID =
+                    :new_bed
+
+                WHERE
+                    ADMISSION_ID =
+                    :admission_id
+
+            ");
+
 
         $updateAdmission->execute([
-            ':new_bed'      => $new_bed,
-            ':admission_id' => $admission_id
+            ':new_bed' =>
+                $new_bed,
+
+            ':admission_id' =>
+                $admission_id
         ]);
 
 
-        /*
-        |--------------------------------------------------------------------------
-        | Free old bed
-        |--------------------------------------------------------------------------
-        */
+        /* =================================================
+           FREE OLD BED
+        ================================================= */
 
-        $freeOldBed = $conn->prepare("
-            UPDATE SYARMIMI.BED
-            SET STATUS = 'Available'
-            WHERE BED_ID = :bed_id
-        ");
+        $freeOldBed =
+            $conn->prepare("
+
+                UPDATE
+                    SYARMIMI.BED
+
+                SET
+                    STATUS =
+                    'Available'
+
+                WHERE
+                    BED_ID =
+                    :bed_id
+
+            ");
+
 
         $freeOldBed->execute([
-            ':bed_id' => $old['BED_ID']
+            ':bed_id' =>
+                $old['BED_ID']
         ]);
 
 
-        /*
-        |--------------------------------------------------------------------------
-        | Occupy new bed
-        |--------------------------------------------------------------------------
-        */
+        /* =================================================
+           OCCUPY NEW BED
+        ================================================= */
 
-        $occupyNewBed = $conn->prepare("
-            UPDATE SYARMIMI.BED
-            SET STATUS = 'Occupied'
-            WHERE BED_ID = :bed_id
-        ");
+        $occupyNewBed =
+            $conn->prepare("
+
+                UPDATE
+                    SYARMIMI.BED
+
+                SET
+                    STATUS =
+                    'Occupied'
+
+                WHERE
+                    BED_ID =
+                    :bed_id
+
+            ");
+
 
         $occupyNewBed->execute([
-            ':bed_id' => $new_bed
+            ':bed_id' =>
+                $new_bed
         ]);
 
 
@@ -388,9 +528,13 @@ if (isset($_POST['transfer'])) {
 
     } catch (PDOException $e) {
 
-        if ($conn->inTransaction()) {
+        if (
+            $conn->inTransaction()
+        ) {
+
             $conn->rollBack();
         }
+
 
         redirectWard(
             $current_ward,
@@ -401,19 +545,34 @@ if (isset($_POST['transfer'])) {
 }
 
 
-/*
-|--------------------------------------------------------------------------
-| ADD BED
-|--------------------------------------------------------------------------
-*/
+/* =========================================================
+   ADD BED
+========================================================= */
 
 if (isset($_POST['add_bed'])) {
 
-    $new_ward_id = trim($_POST['ward_id'] ?? '');
-    $bed_no      = trim($_POST['bed_number'] ?? '');
-    $current_ward = $_POST['current_ward'] ?? 'All';
+    $new_ward_id =
+        trim(
+            $_POST['ward_id']
+            ?? ''
+        );
 
-    if ($new_ward_id === '' || $bed_no === '') {
+    $bed_no =
+        trim(
+            $_POST['bed_number']
+            ?? ''
+        );
+
+    $current_ward =
+        $_POST['current_ward']
+        ?? 'All';
+
+
+    if (
+        $new_ward_id === ''
+        ||
+        $bed_no === ''
+    ) {
 
         redirectWard(
             $current_ward,
@@ -422,25 +581,40 @@ if (isset($_POST['add_bed'])) {
         );
     }
 
+
     try {
 
-        /*
-        |--------------------------------------------------------------------------
-        | Check ward exists
-        |--------------------------------------------------------------------------
-        */
+        /* =================================================
+           CHECK WARD
+        ================================================= */
 
-        $wardCheck = $conn->prepare("
-            SELECT COUNT(*)
-            FROM SYARMIMI.WARD
-            WHERE WARD_ID = :ward_id
-        ");
+        $wardCheck =
+            $conn->prepare("
+
+                SELECT
+                    COUNT(*)
+
+                FROM
+                    SYARMIMI.WARD
+
+                WHERE
+                    WARD_ID =
+                    :ward_id
+
+            ");
+
 
         $wardCheck->execute([
-            ':ward_id' => $new_ward_id
+            ':ward_id' =>
+                $new_ward_id
         ]);
 
-        if ((int)$wardCheck->fetchColumn() === 0) {
+
+        if (
+            (int)$wardCheck
+                ->fetchColumn()
+            === 0
+        ) {
 
             redirectWard(
                 $current_ward,
@@ -450,83 +624,142 @@ if (isset($_POST['add_bed'])) {
         }
 
 
-        /*
-        |--------------------------------------------------------------------------
-        | Check duplicate bed number inside same ward
-        |--------------------------------------------------------------------------
-        */
+        /* =================================================
+           DUPLICATE BED
+        ================================================= */
 
-        $check = $conn->prepare("
-            SELECT COUNT(*)
-            FROM SYARMIMI.BED
-            WHERE UPPER(TRIM(BED_NUMBER)) = UPPER(TRIM(:bed_number))
-              AND WARD_ID = :ward_id
-        ");
+        $check =
+            $conn->prepare("
+
+                SELECT
+                    COUNT(*)
+
+                FROM
+                    SYARMIMI.BED
+
+                WHERE
+                    UPPER(
+                        TRIM(
+                            BED_NUMBER
+                        )
+                    )
+                    =
+                    UPPER(
+                        TRIM(
+                            :bed_number
+                        )
+                    )
+
+                AND
+                    WARD_ID =
+                    :ward_id
+
+            ");
+
 
         $check->execute([
-            ':bed_number' => $bed_no,
-            ':ward_id'    => $new_ward_id
+            ':bed_number' =>
+                $bed_no,
+
+            ':ward_id' =>
+                $new_ward_id
         ]);
 
-        if ((int)$check->fetchColumn() > 0) {
+
+        if (
+            (int)$check
+                ->fetchColumn()
+            > 0
+        ) {
 
             redirectWard(
                 $current_ward,
-                'Bed number ' . $bed_no . ' already exists in this ward.',
+                'Bed number ' .
+                $bed_no .
+                ' already exists in this ward.',
                 'warning'
             );
         }
 
 
-        /*
-        |--------------------------------------------------------------------------
-        | Generate next BED_ID
-        |--------------------------------------------------------------------------
-        */
+        /* =================================================
+           NEW BED ID
+        ================================================= */
 
-        $idStmt = $conn->query("
-            SELECT NVL(MAX(BED_ID), 0) + 1 AS NEW_ID
-            FROM SYARMIMI.BED
-        ");
+        $idStmt =
+            $conn->query("
 
-        $idRow = $idStmt->fetch(PDO::FETCH_ASSOC);
+                SELECT
+                    NVL(
+                        MAX(BED_ID),
+                        0
+                    ) + 1
+                    AS NEW_ID
 
-        $newId = $idRow['NEW_ID'];
+                FROM
+                    SYARMIMI.BED
+
+            ");
 
 
-        /*
-        |--------------------------------------------------------------------------
-        | Insert bed
-        |--------------------------------------------------------------------------
-        */
+        $idRow =
+            $idStmt->fetch(
+                PDO::FETCH_ASSOC
+            );
 
-        $insert = $conn->prepare("
-            INSERT INTO SYARMIMI.BED
-            (
-                BED_ID,
-                BED_NUMBER,
-                STATUS,
-                WARD_ID
-            )
-            VALUES
-            (
-                :bed_id,
-                :bed_number,
-                'Available',
-                :ward_id
-            )
-        ");
+
+        $newId =
+            $idRow[
+                'NEW_ID'
+            ];
+
+
+        /* =================================================
+           INSERT BED
+        ================================================= */
+
+        $insert =
+            $conn->prepare("
+
+                INSERT INTO
+                    SYARMIMI.BED
+                (
+                    BED_ID,
+                    BED_NUMBER,
+                    STATUS,
+                    WARD_ID
+                )
+
+                VALUES
+                (
+                    :bed_id,
+                    :bed_number,
+                    'Available',
+                    :ward_id
+                )
+
+            ");
+
 
         $insert->execute([
-            ':bed_id'     => $newId,
-            ':bed_number' => $bed_no,
-            ':ward_id'    => $new_ward_id
+            ':bed_id' =>
+                $newId,
+
+            ':bed_number' =>
+                strtoupper(
+                    $bed_no
+                ),
+
+            ':ward_id' =>
+                $new_ward_id
         ]);
 
 
         redirectWard(
             $current_ward,
-            'Bed ' . $bed_no . ' added successfully.',
+            'Bed ' .
+            strtoupper($bed_no) .
+            ' added successfully.',
             'success'
         );
 
@@ -542,137 +775,380 @@ if (isset($_POST['add_bed'])) {
 }
 
 
-/*
-|--------------------------------------------------------------------------
-| WARD SUMMARY
-|--------------------------------------------------------------------------
-*/
+/* =========================================================
+   WARD SUMMARY
+========================================================= */
 
-$wardSummaryStmt = $conn->query("
-    SELECT
-        w.WARD_ID,
-        w.WARD_NAME,
+$wardSummaryStmt =
+    $conn->query("
 
-        COUNT(b.BED_ID) AS TOTAL_BED,
+        SELECT
 
-        SUM(
-            CASE
-                WHEN b.STATUS = 'Occupied' THEN 1
-                ELSE 0
-            END
-        ) AS OCCUPIED,
+            W.WARD_ID,
 
-        SUM(
-            CASE
-                WHEN b.STATUS = 'Available' THEN 1
-                ELSE 0
-            END
-        ) AS AVAILABLE_BEDS
+            W.WARD_NAME,
 
-    FROM SYARMIMI.WARD w
+            COUNT(
+                B.BED_ID
+            )
+            AS TOTAL_BED,
 
-    LEFT JOIN SYARMIMI.BED b
-        ON w.WARD_ID = b.WARD_ID
+            SUM(
+                CASE
+                    WHEN
+                        UPPER(
+                            TRIM(
+                                B.STATUS
+                            )
+                        )
+                        =
+                        'OCCUPIED'
+                    THEN 1
+                    ELSE 0
+                END
+            )
+            AS OCCUPIED,
 
-    GROUP BY
-        w.WARD_ID,
-        w.WARD_NAME
+            SUM(
+                CASE
+                    WHEN
+                        UPPER(
+                            TRIM(
+                                B.STATUS
+                            )
+                        )
+                        =
+                        'AVAILABLE'
+                    THEN 1
+                    ELSE 0
+                END
+            )
+            AS AVAILABLE_BEDS
 
-    ORDER BY
-        w.WARD_ID
-");
+        FROM
+            SYARMIMI.WARD W
 
-$wardSummary = $wardSummaryStmt->fetchAll(PDO::FETCH_ASSOC);
+        LEFT JOIN
+            SYARMIMI.BED B
+
+            ON
+            W.WARD_ID =
+            B.WARD_ID
+
+        GROUP BY
+            W.WARD_ID,
+            W.WARD_NAME
+
+        ORDER BY
+            W.WARD_ID
+
+    ");
 
 
-/*
-|--------------------------------------------------------------------------
-| BED + PATIENT
-|--------------------------------------------------------------------------
-*/
+$wardSummary =
+    $wardSummaryStmt
+        ->fetchAll(
+            PDO::FETCH_ASSOC
+        );
+
+
+/* =========================================================
+   OVERALL COUNTS
+========================================================= */
+
+$totalBeds =
+    (int)$conn->query("
+
+        SELECT COUNT(*)
+        FROM SYARMIMI.BED
+
+    ")->fetchColumn();
+
+
+$totalOccupied =
+    (int)$conn->query("
+
+        SELECT COUNT(*)
+
+        FROM SYARMIMI.BED
+
+        WHERE
+            UPPER(
+                TRIM(
+                    STATUS
+                )
+            )
+            =
+            'OCCUPIED'
+
+    ")->fetchColumn();
+
+
+$totalAvailable =
+    (int)$conn->query("
+
+        SELECT COUNT(*)
+
+        FROM SYARMIMI.BED
+
+        WHERE
+            UPPER(
+                TRIM(
+                    STATUS
+                )
+            )
+            =
+            'AVAILABLE'
+
+    ")->fetchColumn();
+
+
+$totalWards =
+    count(
+        $wardSummary
+    );
+
+
+/* =========================================================
+   AVAILABLE BEDS
+========================================================= */
+
+$availableBedsStmt =
+    $conn->query("
+
+        SELECT
+            B.BED_ID,
+            B.BED_NUMBER,
+            B.WARD_ID,
+            W.WARD_NAME
+
+        FROM
+            SYARMIMI.BED B
+
+        JOIN
+            SYARMIMI.WARD W
+
+            ON
+            B.WARD_ID =
+            W.WARD_ID
+
+        WHERE
+            UPPER(
+                TRIM(
+                    B.STATUS
+                )
+            )
+            =
+            'AVAILABLE'
+
+        ORDER BY
+            W.WARD_NAME,
+            B.BED_NUMBER
+
+    ");
+
+
+$availableBeds =
+    $availableBedsStmt
+        ->fetchAll(
+            PDO::FETCH_ASSOC
+        );
+
+
+/* =========================================================
+   BED + ACTIVE PATIENT
+========================================================= */
 
 $sql = "
+
     SELECT
-        b.BED_ID,
-        b.BED_NUMBER,
-        b.STATUS,
 
-        w.WARD_ID,
-        w.WARD_NAME,
+        B.BED_ID,
 
-        a.ADMISSION_ID,
+        B.BED_NUMBER,
 
-        p.NAME,
-        p.AGE,
-        p.GENDER,
+        B.STATUS,
+
+        W.WARD_ID,
+
+        W.WARD_NAME,
+
+        A.ADMISSION_ID,
+
+        P.NAME,
+
+        P.AGE,
+
+        P.GENDER,
 
         (
-            SELECT COUNT(*)
-            FROM SYARMIMI.ADMISSION a2
-            WHERE a2.BED_ID = b.BED_ID
-        ) AS TOTAL_HISTORY
+            SELECT
+                COUNT(*)
 
-    FROM SYARMIMI.BED b
+            FROM
+                SYARMIMI.ADMISSION A2
 
-    JOIN SYARMIMI.WARD w
-        ON b.WARD_ID = w.WARD_ID
+            WHERE
+                A2.BED_ID =
+                B.BED_ID
+        )
+        AS TOTAL_HISTORY
 
-    LEFT JOIN SYARMIMI.ADMISSION a
-        ON b.BED_ID = a.BED_ID
-        AND a.DISCHARGE_DATE IS NULL
+    FROM
+        SYARMIMI.BED B
 
-    LEFT JOIN SYARMIMI.PATIENT p
-        ON a.PATIENT_ID = p.PATIENT_ID
+    JOIN
+        SYARMIMI.WARD W
 
-    WHERE 1 = 1
+        ON
+        B.WARD_ID =
+        W.WARD_ID
+
+    LEFT JOIN
+        SYARMIMI.ADMISSION A
+
+        ON
+        B.BED_ID =
+        A.BED_ID
+
+        AND
+        A.DISCHARGE_DATE
+        IS NULL
+
+    LEFT JOIN
+        SYARMIMI.PATIENT P
+
+        ON
+        A.PATIENT_ID =
+        P.PATIENT_ID
+
+    WHERE
+        1 = 1
+
 ";
 
 
 $params = [];
 
+
 if ($ward_id !== 'All') {
 
-    $sql .= " AND b.WARD_ID = :ward_id";
+    $sql .= "
 
-    $params[':ward_id'] = $ward_id;
+        AND
+            B.WARD_ID =
+            :ward_id
+
+    ";
+
+
+    $params[
+        ':ward_id'
+    ] =
+        $ward_id;
 }
 
+
 $sql .= "
-    ORDER BY b.BED_ID
+
+    ORDER BY
+        W.WARD_ID,
+        B.BED_NUMBER
+
 ";
 
 
-$bedStmt = $conn->prepare($sql);
-$bedStmt->execute($params);
-
-$result = $bedStmt->fetchAll(PDO::FETCH_ASSOC);
-
-
-/*
-|--------------------------------------------------------------------------
-| WARD LIST
-|--------------------------------------------------------------------------
-*/
-
-$wardsStmt = $conn->query("
-    SELECT
-        WARD_ID,
-        WARD_NAME
-    FROM SYARMIMI.WARD
-    ORDER BY WARD_ID
-");
-
-$wards = $wardsStmt->fetchAll(PDO::FETCH_ASSOC);
+$bedStmt =
+    $conn->prepare(
+        $sql
+    );
 
 
-/*
-|--------------------------------------------------------------------------
-| ALERT MESSAGE FROM REDIRECT
-|--------------------------------------------------------------------------
-*/
+$bedStmt->execute(
+    $params
+);
 
-$message = $_GET['msg'] ?? '';
-$messageType = $_GET['type'] ?? 'success';
+
+$result =
+    $bedStmt->fetchAll(
+        PDO::FETCH_ASSOC
+    );
+
+
+/* =========================================================
+   WARD LIST
+========================================================= */
+
+$wardsStmt =
+    $conn->query("
+
+        SELECT
+            WARD_ID,
+            WARD_NAME
+
+        FROM
+            SYARMIMI.WARD
+
+        ORDER BY
+            WARD_ID
+
+    ");
+
+
+$wards =
+    $wardsStmt
+        ->fetchAll(
+            PDO::FETCH_ASSOC
+        );
+
+
+/* =========================================================
+   SELECTED WARD NAME
+========================================================= */
+
+$selectedWardName =
+    'All Wards';
+
+
+if ($ward_id !== 'All') {
+
+    foreach (
+        $wards
+        as
+        $ward
+    ) {
+
+        if (
+            (string)$ward[
+                'WARD_ID'
+            ]
+            ===
+            (string)$ward_id
+        ) {
+
+            $selectedWardName =
+                $ward[
+                    'WARD_NAME'
+                ];
+
+            break;
+        }
+    }
+}
+
+
+/* =========================================================
+   REDIRECT MESSAGE
+========================================================= */
+
+$message =
+    $_GET['msg']
+    ?? '';
+
+
+$messageType =
+    $_GET['type']
+    ?? 'success';
 
 ?>
 
@@ -684,12 +1160,15 @@ $messageType = $_GET['type'] ?? 'success';
 
 <meta charset="UTF-8">
 
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+>
 
-<title>Ward Layout (Admin)</title>
+<title>
+Ward Management
+</title>
 
-
-<!-- Bootstrap -->
 
 <link
     href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
@@ -697,204 +1176,1239 @@ $messageType = $_GET['type'] ?? 'success';
 >
 
 
-<!-- Bootstrap Icons -->
-
 <link
     href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css"
     rel="stylesheet"
 >
 
 
-<!-- SweetAlert -->
-
-<script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+<script
+    src="https://cdn.jsdelivr.net/npm/sweetalert2@11"
+></script>
 
 
 <style>
 
-body {
-    background: #eef2f7;
+/* =========================================================
+   GLOBAL
+========================================================= */
+
+*{
+    box-sizing:border-box;
 }
 
 
-/* =========================
-   WARD BOX
-========================= */
+body{
 
-.ward-box {
-    background: white;
-    padding: 25px;
-    border-radius: 18px;
-    box-shadow: 0 6px 16px rgba(0,0,0,0.08);
+    margin:0;
+
+    background:#f5f7fa;
+
+    color:#1f2937;
+
+    font-family:
+        'Segoe UI',
+        Arial,
+        sans-serif;
 }
 
 
-/* =========================
-   SUMMARY CARD
-========================= */
+.main-content{
 
-.summary-card {
-    border-radius: 14px;
-    transition: all 0.3s ease;
-    position: relative;
-}
+    flex:1;
 
-.summary-card:hover {
-    transform: translateY(-5px);
-    box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+    min-width:0;
+
+    min-height:100vh;
+
+    padding:30px;
 }
 
 
-/* =========================
+/* =========================================================
+   HEADER
+========================================================= */
+
+.page-header{
+
+    display:flex;
+
+    justify-content:space-between;
+
+    align-items:flex-start;
+
+    gap:20px;
+
+    margin-bottom:24px;
+}
+
+
+.page-title{
+
+    margin:0;
+
+    color:#111827;
+
+    font-size:30px;
+
+    font-weight:750;
+}
+
+
+.page-subtitle{
+
+    margin-top:6px;
+
+    color:#64748b;
+
+    font-size:14px;
+}
+
+
+.header-badge{
+
+    display:inline-flex;
+
+    align-items:center;
+
+    gap:7px;
+
+    padding:9px 12px;
+
+    background:#eff6ff;
+
+    border:1px solid #dbeafe;
+
+    border-radius:8px;
+
+    color:#2563eb;
+
+    font-size:12px;
+
+    font-weight:650;
+}
+
+
+/* =========================================================
+   OVERALL SUMMARY
+========================================================= */
+
+.overall-grid{
+
+    display:grid;
+
+    grid-template-columns:
+        repeat(
+            4,
+            minmax(0,1fr)
+        );
+
+    gap:14px;
+
+    margin-bottom:22px;
+}
+
+
+.overall-card{
+
+    display:flex;
+
+    align-items:center;
+
+    justify-content:space-between;
+
+    gap:14px;
+
+    padding:18px 19px;
+
+    background:#fff;
+
+    border:1px solid #e5e7eb;
+
+    border-radius:13px;
+
+    box-shadow:
+        0 3px 12px
+        rgba(15,23,42,.035);
+}
+
+
+.overall-label{
+
+    color:#64748b;
+
+    font-size:12px;
+
+    font-weight:600;
+}
+
+
+.overall-number{
+
+    margin-top:5px;
+
+    color:#111827;
+
+    font-size:28px;
+
+    font-weight:750;
+
+    line-height:1;
+}
+
+
+.overall-icon{
+
+    width:44px;
+
+    height:44px;
+
+    min-width:44px;
+
+    display:flex;
+
+    align-items:center;
+
+    justify-content:center;
+
+    border-radius:11px;
+
+    font-size:18px;
+}
+
+
+.icon-wards{
+
+    background:#f5f3ff;
+
+    color:#7c3aed;
+}
+
+
+.icon-beds{
+
+    background:#eff6ff;
+
+    color:#2563eb;
+}
+
+
+.icon-occupied{
+
+    background:#fff1f2;
+
+    color:#e11d48;
+}
+
+
+.icon-available{
+
+    background:#ecfdf5;
+
+    color:#15803d;
+}
+
+
+/* =========================================================
+   CONTENT CARD
+========================================================= */
+
+.content-card{
+
+    margin-bottom:20px;
+
+    padding:22px;
+
+    background:#fff;
+
+    border:1px solid #e5e7eb;
+
+    border-radius:14px;
+
+    box-shadow:
+        0 3px 12px
+        rgba(15,23,42,.04);
+}
+
+
+.card-heading{
+
+    display:flex;
+
+    align-items:center;
+
+    justify-content:space-between;
+
+    gap:15px;
+
+    margin-bottom:18px;
+}
+
+
+.card-heading-left{
+
+    display:flex;
+
+    align-items:center;
+
+    gap:11px;
+}
+
+
+.card-icon{
+
+    width:38px;
+
+    height:38px;
+
+    min-width:38px;
+
+    display:flex;
+
+    align-items:center;
+
+    justify-content:center;
+
+    border-radius:10px;
+
+    font-size:16px;
+}
+
+
+.icon-add{
+
+    background:#ecfdf5;
+
+    color:#15803d;
+}
+
+
+.icon-layout{
+
+    background:#eff6ff;
+
+    color:#2563eb;
+}
+
+
+.card-title-clean{
+
+    margin:0;
+
+    color:#1f2937;
+
+    font-size:17px;
+
+    font-weight:700;
+}
+
+
+.card-subtitle{
+
+    margin-top:3px;
+
+    color:#94a3b8;
+
+    font-size:12px;
+}
+
+
+/* =========================================================
+   FORM
+========================================================= */
+
+.form-label{
+
+    margin-bottom:7px;
+
+    color:#475569;
+
+    font-size:12px;
+
+    font-weight:650;
+}
+
+
+.form-control,
+.form-select{
+
+    min-height:45px;
+
+    border:1px solid #dfe3e8;
+
+    border-radius:9px;
+
+    color:#374151;
+
+    font-size:13px;
+}
+
+
+.form-control:focus,
+.form-select:focus{
+
+    border-color:#93c5fd;
+
+    box-shadow:
+        0 0 0 3px
+        rgba(37,99,235,.07);
+}
+
+
+.btn-main{
+
+    min-height:45px;
+
+    border-radius:9px;
+
+    font-size:12px;
+
+    font-weight:650;
+}
+
+
+.btn-add{
+
+    background:#16a34a;
+
+    border-color:#16a34a;
+
+    color:#fff;
+}
+
+
+.btn-add:hover{
+
+    background:#15803d;
+
+    border-color:#15803d;
+
+    color:#fff;
+}
+
+
+/* =========================================================
+   WARD SUMMARY
+========================================================= */
+
+.ward-summary-grid{
+
+    display:grid;
+
+    grid-template-columns:
+        repeat(
+            4,
+            minmax(0,1fr)
+        );
+
+    gap:14px;
+
+    margin-bottom:22px;
+}
+
+
+.ward-summary-card{
+
+    position:relative;
+
+    padding:18px;
+
+    background:#fff;
+
+    border:1px solid #e5e7eb;
+
+    border-radius:13px;
+
+    overflow:hidden;
+
+    transition:.2s;
+}
+
+
+.ward-summary-card:hover{
+
+    transform:translateY(-2px);
+
+    border-color:#d8dee6;
+
+    box-shadow:
+        0 5px 14px
+        rgba(15,23,42,.05);
+}
+
+
+.ward-summary-card.warning{
+
+    border-color:#fde68a;
+}
+
+
+.ward-summary-card.critical{
+
+    border-color:#fecaca;
+}
+
+
+.ward-name{
+
+    color:#1f2937;
+
+    font-size:14px;
+
+    font-weight:700;
+}
+
+
+.ward-status-row{
+
+    display:flex;
+
+    justify-content:space-between;
+
+    align-items:center;
+
+    margin-top:15px;
+
+    gap:10px;
+}
+
+
+.ward-total-label{
+
+    color:#94a3b8;
+
+    font-size:10px;
+
+    text-transform:uppercase;
+
+    font-weight:650;
+}
+
+
+.ward-total-number{
+
+    margin-top:2px;
+
+    color:#111827;
+
+    font-size:20px;
+
+    font-weight:700;
+}
+
+
+.ward-mini-stat{
+
+    text-align:right;
+}
+
+
+.ward-mini-value{
+
+    font-size:13px;
+
+    font-weight:700;
+}
+
+
+.text-available{
+
+    color:#15803d;
+}
+
+
+.text-critical{
+
+    color:#dc2626;
+}
+
+
+.text-warning-custom{
+
+    color:#d97706;
+}
+
+
+/* =========================================================
+   PROGRESS
+========================================================= */
+
+.occupancy-progress{
+
+    height:6px;
+
+    margin-top:14px;
+
+    overflow:hidden;
+
+    background:#f1f5f9;
+
+    border-radius:20px;
+}
+
+
+.occupancy-bar{
+
+    height:100%;
+
+    border-radius:20px;
+}
+
+
+.occupancy-low{
+
+    background:#22c55e;
+}
+
+
+.occupancy-medium{
+
+    background:#f59e0b;
+}
+
+
+.occupancy-high{
+
+    background:#ef4444;
+}
+
+
+.ward-footer{
+
+    display:flex;
+
+    justify-content:space-between;
+
+    align-items:center;
+
+    gap:10px;
+
+    margin-top:11px;
+}
+
+
+.occupancy-text{
+
+    color:#94a3b8;
+
+    font-size:10px;
+}
+
+
+.capacity-alert{
+
+    display:inline-flex;
+
+    align-items:center;
+
+    gap:4px;
+
+    padding:5px 7px;
+
+    border-radius:6px;
+
+    font-size:9px;
+
+    font-weight:700;
+}
+
+
+.capacity-ok{
+
+    background:#ecfdf5;
+
+    color:#15803d;
+}
+
+
+.capacity-warning{
+
+    background:#fffbeb;
+
+    color:#d97706;
+}
+
+
+.capacity-critical{
+
+    background:#fff1f2;
+
+    color:#dc2626;
+}
+
+
+/* =========================================================
+   FILTER
+========================================================= */
+
+.filter-box{
+
+    margin-bottom:20px;
+
+    padding:15px;
+
+    background:#f8fafc;
+
+    border:1px solid #e5e7eb;
+
+    border-radius:10px;
+}
+
+
+.filter-title{
+
+    margin-bottom:10px;
+
+    color:#64748b;
+
+    font-size:11px;
+
+    font-weight:700;
+
+    text-transform:uppercase;
+
+    letter-spacing:.3px;
+}
+
+
+/* =========================================================
    BED GRID
-========================= */
+========================================================= */
 
-.bed-grid {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 20px;
+.bed-grid{
+
+    display:grid;
+
+    grid-template-columns:
+        repeat(
+            4,
+            minmax(0,1fr)
+        );
+
+    gap:14px;
 }
 
 
-/* =========================
+/* =========================================================
    BED CARD
-========================= */
+========================================================= */
 
-.bed-card {
-    min-height: 170px;
-    border-radius: 16px;
-    padding: 15px;
-    text-align: center;
-    transition: 0.2s;
-}
+.bed-card{
 
-.bed-card:hover {
-    transform: scale(1.02);
-}
+    position:relative;
 
-.available {
-    background: #d1fae5;
-}
+    min-height:205px;
 
-.occupied {
-    background: #fee2e2;
+    padding:17px;
+
+    background:#fff;
+
+    border:1px solid #e5e7eb;
+
+    border-radius:13px;
+
+    transition:.2s;
 }
 
 
-/* =========================
-   DETAILS
-========================= */
+.bed-card:hover{
 
-.details {
-    margin-top: 10px;
-    font-size: 14px;
+    transform:translateY(-2px);
+
+    box-shadow:
+        0 5px 15px
+        rgba(15,23,42,.06);
 }
 
 
-/* =========================
-   ALERT
-========================= */
+.bed-card.available-card{
 
-.low-stock-alert {
-    position: relative;
-    overflow: hidden;
-}
-
-.low-stock-alert::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-
-    background: linear-gradient(
-        45deg,
-        #ff6b6b22,
-        #ffd93d22
-    );
-
-    border-radius: 14px;
-
-    animation: pulse-alert 2s ease-in-out infinite;
+    border-top:
+        3px solid #22c55e;
 }
 
 
-@keyframes pulse-alert {
+.bed-card.occupied-card{
 
-    0%, 100% {
-        opacity: 0.3;
-    }
-
-    50% {
-        opacity: 0.8;
-    }
+    border-top:
+        3px solid #ef4444;
 }
 
 
-/* =========================
-   ALERT BADGE
-========================= */
+.bed-card-header{
 
-.alert-badge {
-    position: absolute;
-    top: -8px;
-    right: -8px;
+    display:flex;
 
-    animation: bounce 1s ease infinite;
+    justify-content:space-between;
+
+    align-items:flex-start;
+
+    gap:10px;
+
+    margin-bottom:15px;
 }
 
 
-@keyframes bounce {
+.bed-icon{
 
-    0%, 100% {
-        transform: scale(1);
-    }
+    width:42px;
 
-    50% {
-        transform: scale(1.1);
-    }
+    height:42px;
+
+    display:flex;
+
+    align-items:center;
+
+    justify-content:center;
+
+    border-radius:10px;
+
+    font-size:19px;
 }
 
 
-/* =========================
-   ADD BED BUTTON
-========================= */
+.available-card .bed-icon{
 
-.add-bed-btn {
-    transition: all 0.3s ease;
-}
+    background:#ecfdf5;
 
-.add-bed-btn:hover {
-    transform: scale(1.05);
-    box-shadow: 0 4px 15px rgba(13, 110, 253, 0.3);
+    color:#15803d;
 }
 
 
-/* =========================
+.occupied-card .bed-icon{
+
+    background:#fff1f2;
+
+    color:#dc2626;
+}
+
+
+.bed-number{
+
+    color:#111827;
+
+    font-size:17px;
+
+    font-weight:750;
+}
+
+
+.bed-ward{
+
+    margin-top:2px;
+
+    color:#94a3b8;
+
+    font-size:10px;
+}
+
+
+.status-pill{
+
+    display:inline-flex;
+
+    align-items:center;
+
+    gap:5px;
+
+    padding:5px 8px;
+
+    border-radius:6px;
+
+    font-size:9px;
+
+    font-weight:700;
+}
+
+
+.status-available{
+
+    background:#ecfdf5;
+
+    color:#15803d;
+}
+
+
+.status-occupied{
+
+    background:#fff1f2;
+
+    color:#dc2626;
+}
+
+
+/* =========================================================
+   EMPTY BED
+========================================================= */
+
+.empty-bed{
+
+    min-height:95px;
+
+    display:flex;
+
+    flex-direction:column;
+
+    align-items:center;
+
+    justify-content:center;
+
+    color:#94a3b8;
+
+    text-align:center;
+
+    font-size:11px;
+}
+
+
+.empty-bed i{
+
+    margin-bottom:7px;
+
+    font-size:20px;
+
+    color:#cbd5e1;
+}
+
+
+/* =========================================================
+   PATIENT
+========================================================= */
+
+.patient-box{
+
+    margin-bottom:12px;
+
+    padding:11px;
+
+    background:#f8fafc;
+
+    border-radius:8px;
+}
+
+
+.patient-name{
+
+    color:#111827;
+
+    font-size:13px;
+
+    font-weight:700;
+}
+
+
+.patient-meta{
+
+    display:flex;
+
+    gap:12px;
+
+    margin-top:5px;
+
+    color:#64748b;
+
+    font-size:10px;
+}
+
+
+/* =========================================================
+   TRANSFER
+========================================================= */
+
+.transfer-box{
+
+    margin-top:11px;
+
+    padding-top:11px;
+
+    border-top:1px solid #eef1f4;
+}
+
+
+.transfer-label{
+
+    display:block;
+
+    margin-bottom:6px;
+
+    color:#64748b;
+
+    font-size:10px;
+
+    font-weight:650;
+}
+
+
+.transfer-row{
+
+    display:flex;
+
+    gap:6px;
+}
+
+
+.transfer-row .form-select{
+
+    min-height:35px;
+
+    font-size:10px;
+
+    border-radius:7px;
+}
+
+
+.btn-transfer{
+
+    flex:0 0 auto;
+
+    min-height:35px;
+
+    padding:0 9px;
+
+    background:#fff7ed;
+
+    border:1px solid #fed7aa;
+
+    border-radius:7px;
+
+    color:#c2410c;
+
+    font-size:10px;
+
+    font-weight:650;
+}
+
+
+.btn-transfer:hover{
+
+    background:#f97316;
+
+    border-color:#f97316;
+
+    color:#fff;
+}
+
+
+/* =========================================================
+   HISTORY / DELETE
+========================================================= */
+
+.bed-footer{
+
+    display:flex;
+
+    justify-content:space-between;
+
+    align-items:center;
+
+    gap:8px;
+
+    margin-top:12px;
+
+    padding-top:11px;
+
+    border-top:1px solid #eef1f4;
+}
+
+
+.history-text{
+
+    color:#94a3b8;
+
+    font-size:9px;
+}
+
+
+.history-text strong{
+
+    color:#64748b;
+}
+
+
+.btn-delete-bed{
+
+    padding:5px 8px;
+
+    border:1px solid #fecaca;
+
+    background:#fff;
+
+    border-radius:6px;
+
+    color:#dc2626;
+
+    font-size:9px;
+
+    font-weight:650;
+}
+
+
+.btn-delete-bed:hover{
+
+    background:#dc2626;
+
+    border-color:#dc2626;
+
+    color:#fff;
+}
+
+
+.btn-delete-bed:disabled{
+
+    border-color:#e5e7eb;
+
+    background:#f3f4f6;
+
+    color:#9ca3af;
+
+    opacity:1;
+}
+
+
+/* =========================================================
+   EMPTY STATE
+========================================================= */
+
+.empty-state{
+
+    grid-column:1 / -1;
+
+    padding:45px 20px;
+
+    background:#f8fafc;
+
+    border:1px dashed #d8dee6;
+
+    border-radius:12px;
+
+    color:#94a3b8;
+
+    text-align:center;
+}
+
+
+.empty-state i{
+
+    display:block;
+
+    margin-bottom:10px;
+
+    font-size:30px;
+}
+
+
+/* =========================================================
+   MODAL
+========================================================= */
+
+.modal-content{
+
+    border:0;
+
+    border-radius:14px;
+
+    overflow:hidden;
+
+    box-shadow:
+        0 25px 60px
+        rgba(15,23,42,.20);
+}
+
+
+.modal-header{
+
+    padding:18px 20px;
+
+    background:#fff;
+
+    border-bottom:1px solid #e5e7eb;
+}
+
+
+.modal-title{
+
+    color:#111827;
+
+    font-size:17px;
+
+    font-weight:700;
+}
+
+
+.modal-body{
+
+    padding:21px;
+}
+
+
+/* =========================================================
    RESPONSIVE
-========================= */
+========================================================= */
 
-@media (max-width: 992px) {
+@media(max-width:1200px){
 
-    .bed-grid {
-        grid-template-columns: repeat(3, 1fr);
+    .overall-grid,
+    .ward-summary-grid{
+
+        grid-template-columns:
+            repeat(
+                2,
+                minmax(0,1fr)
+            );
+    }
+
+
+    .bed-grid{
+
+        grid-template-columns:
+            repeat(
+                3,
+                minmax(0,1fr)
+            );
     }
 
 }
 
-@media (max-width: 768px) {
 
-    .bed-grid {
-        grid-template-columns: repeat(2, 1fr);
+@media(max-width:900px){
+
+    .main-content{
+
+        padding:18px;
+    }
+
+
+    .page-header{
+
+        flex-direction:column;
+    }
+
+
+    .bed-grid{
+
+        grid-template-columns:
+            repeat(
+                2,
+                minmax(0,1fr)
+            );
     }
 
 }
 
-@media (max-width: 576px) {
 
-    .bed-grid {
-        grid-template-columns: 1fr;
+@media(max-width:600px){
+
+    .overall-grid,
+    .ward-summary-grid,
+    .bed-grid{
+
+        grid-template-columns:1fr;
+    }
+
+
+    .page-title{
+
+        font-size:24px;
     }
 
 }
@@ -910,364 +2424,660 @@ body {
 <div class="d-flex">
 
 
-<?php include("../includes/sidebar_admin.php"); ?>
+<?php
+include("../includes/sidebar_admin.php");
+?>
 
 
-<div class="flex-grow-1 p-4">
+<div class="main-content">
 
 
-<!-- =========================================================
-     PAGE TITLE
-========================================================= -->
+<!-- =====================================================
+     HEADER
+===================================================== -->
 
-<div class="d-flex justify-content-between align-items-center mb-4">
+<div class="page-header">
 
-    <div>
 
-        <h3 class="mb-1">
-            🏥 Ward Management (Admin)
-        </h3>
+<div>
 
-        <p class="text-muted mb-0">
-            Manage hospital wards and beds
-        </p>
 
-    </div>
+<h1 class="page-title">
+
+Ward Management
+
+</h1>
+
+
+<div class="page-subtitle">
+
+Monitor ward capacity, hospital beds and patient bed assignments.
 
 </div>
 
 
-<!-- =========================================================
+</div>
+
+
+<div class="header-badge">
+
+<i class="bi bi-hospital"></i>
+
+<?= h(
+    $selectedWardName
+) ?>
+
+</div>
+
+
+</div>
+
+
+
+<!-- =====================================================
+     OVERALL SUMMARY
+===================================================== -->
+
+<div class="overall-grid">
+
+
+<div class="overall-card">
+
+
+<div>
+
+<div class="overall-label">
+
+Total Wards
+
+</div>
+
+<div class="overall-number">
+
+<?= $totalWards ?>
+
+</div>
+
+</div>
+
+
+<div class="overall-icon icon-wards">
+
+<i class="bi bi-building"></i>
+
+</div>
+
+
+</div>
+
+
+
+<div class="overall-card">
+
+
+<div>
+
+<div class="overall-label">
+
+Total Beds
+
+</div>
+
+<div class="overall-number">
+
+<?= $totalBeds ?>
+
+</div>
+
+</div>
+
+
+<div class="overall-icon icon-beds">
+
+<i class="bi bi-hospital"></i>
+
+</div>
+
+
+</div>
+
+
+
+<div class="overall-card">
+
+
+<div>
+
+<div class="overall-label">
+
+Occupied Beds
+
+</div>
+
+<div class="overall-number">
+
+<?= $totalOccupied ?>
+
+</div>
+
+</div>
+
+
+<div class="overall-icon icon-occupied">
+
+<i class="bi bi-person-fill"></i>
+
+</div>
+
+
+</div>
+
+
+
+<div class="overall-card">
+
+
+<div>
+
+<div class="overall-label">
+
+Available Beds
+
+</div>
+
+<div class="overall-number">
+
+<?= $totalAvailable ?>
+
+</div>
+
+</div>
+
+
+<div class="overall-icon icon-available">
+
+<i class="bi bi-check-circle"></i>
+
+</div>
+
+
+</div>
+
+
+</div>
+
+
+
+<!-- =====================================================
      ADD BED
-========================================================= -->
+===================================================== -->
 
-<div class="card shadow-sm mb-4">
-
-    <div class="card-header bg-primary text-white">
-
-        <i class="bi bi-plus-circle"></i>
-
-        Add New Bed
-
-    </div>
+<div class="content-card">
 
 
-    <div class="card-body">
-
-        <form method="POST">
-
-            <input
-                type="hidden"
-                name="current_ward"
-                value="<?= htmlspecialchars($ward_id) ?>"
-            >
+<div class="card-heading">
 
 
-            <div class="row">
+<div class="card-heading-left">
 
 
-                <!-- WARD -->
+<div class="card-icon icon-add">
 
-                <div class="col-md-5">
-
-                    <label class="form-label">
-                        Ward
-                    </label>
-
-                    <select
-                        name="ward_id"
-                        class="form-control"
-                        required
-                    >
-
-                        <option value="">
-                            Select Ward
-                        </option>
-
-
-                        <?php foreach ($wards as $w): ?>
-
-                            <option
-                                value="<?= htmlspecialchars($w['WARD_ID']) ?>"
-                            >
-
-                                <?= htmlspecialchars($w['WARD_NAME']) ?>
-
-                            </option>
-
-                        <?php endforeach; ?>
-
-                    </select>
-
-                </div>
-
-
-                <!-- BED NUMBER -->
-
-                <div class="col-md-5">
-
-                    <label class="form-label">
-                        Bed Number
-                    </label>
-
-                    <input
-                        type="text"
-                        name="bed_number"
-                        class="form-control"
-                        placeholder="Example: B101"
-                        required
-                    >
-
-                </div>
-
-
-                <!-- BUTTON -->
-
-                <div class="col-md-2 d-flex align-items-end">
-
-                    <button
-                        type="submit"
-                        name="add_bed"
-                        class="btn btn-success w-100"
-                    >
-
-                        <i class="bi bi-plus-lg"></i>
-
-                        Add Bed
-
-                    </button>
-
-                </div>
-
-            </div>
-
-        </form>
-
-    </div>
+<i class="bi bi-plus-lg"></i>
 
 </div>
 
 
-<!-- =========================================================
+<div>
+
+<h5 class="card-title-clean">
+
+Add New Bed
+
+</h5>
+
+<div class="card-subtitle">
+
+Add a new bed to one of the existing hospital wards.
+
+</div>
+
+</div>
+
+
+</div>
+
+
+</div>
+
+
+<form method="POST">
+
+
+<input
+    type="hidden"
+    name="current_ward"
+    value="<?= h(
+        $ward_id
+    ) ?>"
+>
+
+
+<div class="row g-3 align-items-end">
+
+
+<div class="col-lg-5">
+
+
+<label class="form-label">
+
+Ward
+
+</label>
+
+
+<select
+    name="ward_id"
+    class="form-select"
+    required
+>
+
+
+<option value="">
+
+Select Ward
+
+</option>
+
+
+<?php foreach (
+    $wards
+    as
+    $ward
+): ?>
+
+
+<option
+    value="<?= h(
+        $ward[
+            'WARD_ID'
+        ]
+    ) ?>"
+>
+
+<?= h(
+    $ward[
+        'WARD_NAME'
+    ]
+) ?>
+
+</option>
+
+
+<?php endforeach; ?>
+
+
+</select>
+
+
+</div>
+
+
+
+<div class="col-lg-5">
+
+
+<label class="form-label">
+
+Bed Number
+
+</label>
+
+
+<input
+    type="text"
+    name="bed_number"
+    class="form-control"
+    placeholder="Example: B101"
+    required
+>
+
+
+</div>
+
+
+
+<div class="col-lg-2">
+
+
+<button
+    type="submit"
+    name="add_bed"
+    class="btn btn-add btn-main w-100"
+>
+
+<i class="bi bi-plus-circle me-1"></i>
+
+Add Bed
+
+</button>
+
+
+</div>
+
+
+</div>
+
+
+</form>
+
+
+</div>
+
+
+
+<!-- =====================================================
      WARD SUMMARY
-========================================================= -->
+===================================================== -->
 
-<div class="row mb-4">
+<div class="ward-summary-grid">
 
 
-<?php foreach ($wardSummary as $w): ?>
+<?php foreach (
+    $wardSummary
+    as
+    $ward
+): ?>
 
 
 <?php
 
-$total = (int)($w['TOTAL_BED'] ?? 0);
-
-$occupied = (int)($w['OCCUPIED'] ?? 0);
-
-$available = (int)($w['AVAILABLE_BEDS'] ?? 0);
-
-$percentage = $total > 0
-    ? round(($occupied / $total) * 100)
-    : 0;
+$total =
+    (int)(
+        $ward[
+            'TOTAL_BED'
+        ]
+        ?? 0
+    );
 
 
-/* Alert */
+$occupied =
+    (int)(
+        $ward[
+            'OCCUPIED'
+        ]
+        ?? 0
+    );
 
-$alertLevel = '';
 
-$alertMessage = '';
+$available =
+    (int)(
+        $ward[
+            'AVAILABLE_BEDS'
+        ]
+        ?? 0
+    );
 
 
-if ($available <= 1 && $total > 0) {
+$percentage =
+    $total > 0
+        ?
+        round(
+            (
+                $occupied
+                /
+                $total
+            )
+            *
+            100
+        )
+        :
+        0;
 
-    $alertLevel = 'danger';
 
-    $alertMessage =
-        "⚠️ CRITICAL: Only {$available} bed left!";
+$capacityClass =
+    '';
+
+
+$alertClass =
+    'capacity-ok';
+
+
+$alertText =
+    'Available';
+
+
+if (
+    $available <= 1
+    &&
+    $total > 0
+) {
+
+    $capacityClass =
+        'critical';
+
+    $alertClass =
+        'capacity-critical';
+
+    $alertText =
+        $available === 0
+            ?
+            'Full'
+            :
+            'Low Capacity';
 
 }
-elseif ($available <= 2 && $total > 0) {
+elseif (
+    $available <= 2
+    &&
+    $total > 0
+) {
 
-    $alertLevel = 'warning';
+    $capacityClass =
+        'warning';
 
-    $alertMessage =
-        "⚠️ WARNING: Only {$available} beds left!";
+    $alertClass =
+        'capacity-warning';
+
+    $alertText =
+        'Limited Beds';
+}
+
+
+if (
+    $percentage >= 80
+) {
+
+    $progressClass =
+        'occupancy-high';
 
 }
-elseif ($percentage >= 80 && $total > 0) {
+elseif (
+    $percentage >= 60
+) {
 
-    $alertLevel = 'info';
+    $progressClass =
+        'occupancy-medium';
 
-    $alertMessage =
-        "ℹ️ Ward is {$percentage}% full";
+}
+else {
 
+    $progressClass =
+        'occupancy-low';
 }
 
 ?>
 
 
-<div class="col-md-3 mb-3">
-
-
 <div
-    class="card summary-card p-3 text-center shadow-sm
-    <?= ($alertLevel === 'danger' || $alertLevel === 'warning')
-        ? 'low-stock-alert'
-        : '' ?>"
-    style="
-        border:
-        <?= $alertLevel === 'danger'
-            ? '3px solid #dc3545'
-            : ($alertLevel === 'warning'
-                ? '3px solid #ffc107'
-                : 'none') ?>;
+    class="
+        ward-summary-card
+        <?= h(
+            $capacityClass
+        ) ?>
     "
 >
 
 
-<?php if (
-    $alertLevel === 'danger' ||
-    $alertLevel === 'warning'
-): ?>
+<div class="ward-name">
 
-<div class="alert-badge">
-
-    <span
-        class="badge bg-<?= htmlspecialchars($alertLevel) ?> rounded-pill"
-        style="font-size:0.8rem;"
-    >
-
-        <?= $alertLevel === 'danger'
-            ? '🚨'
-            : '⚠️' ?>
-
-    </span>
+<?= h(
+    $ward[
+        'WARD_NAME'
+    ]
+) ?>
 
 </div>
 
-<?php endif; ?>
+
+<div class="ward-status-row">
 
 
-<h6>
-
-    🏥 <?= htmlspecialchars($w['WARD_NAME']) ?>
-
-</h6>
+<div>
 
 
-<p>
+<div class="ward-total-label">
 
-    Total:
-    <?= $total ?>
+Total Beds
 
-    <br>
-
-    Occupied:
-    <?= $occupied ?>
-
-    <br>
-
-    Available:
-
-    <strong
-        class="text-<?=
-            $available <= 1
-                ? 'danger'
-                : ($available <= 2
-                    ? 'warning'
-                    : 'success')
-        ?>"
-    >
-
-        <?= $available ?>
-
-    </strong>
-
-</p>
+</div>
 
 
-<!-- PROGRESS -->
+<div class="ward-total-number">
+
+<?= $total ?>
+
+</div>
+
+
+</div>
+
+
+<div class="ward-mini-stat">
+
+
+<div class="ward-total-label">
+
+Available
+
+</div>
+
 
 <div
-    class="progress mb-2"
-    style="height:8px;"
+    class="
+        ward-mini-value
+        <?=
+        $available <= 1
+            ?
+            'text-critical'
+            :
+            (
+                $available <= 2
+                    ?
+                    'text-warning-custom'
+                    :
+                    'text-available'
+            )
+        ?>
+    "
 >
 
-    <div
-        class="progress-bar bg-<?=
-            $percentage >= 90
-                ? 'danger'
-                : ($percentage >= 70
-                    ? 'warning'
-                    : 'success')
-        ?>"
-        role="progressbar"
-        style="width:<?= $percentage ?>%;"
-        aria-valuenow="<?= $percentage ?>"
-        aria-valuemin="0"
-        aria-valuemax="100"
-    >
-    </div>
+<?= $available ?>
 
 </div>
 
 
-<?php if ($available == 0): ?>
-
-<span class="badge bg-danger">
-    FULL
-</span>
-
-<?php else: ?>
-
-<span class="badge bg-success">
-    AVAILABLE
-</span>
-
-<?php endif; ?>
+</div>
 
 
-<!-- ALERT -->
+</div>
 
-<?php if (
-    $alertLevel === 'danger' ||
-    $alertLevel === 'warning'
-): ?>
+
+
+<div class="occupancy-progress">
+
 
 <div
-    class="mt-2 p-2 bg-<?= htmlspecialchars($alertLevel) ?> bg-opacity-10 rounded"
->
+    class="
+        occupancy-bar
+        <?= $progressClass ?>
+    "
+    style="
+        width:
+        <?= $percentage ?>%;
+    "
+></div>
 
-    <small
-        class="text-<?= htmlspecialchars($alertLevel) ?> d-block mb-2"
-    >
-
-        <strong>
-            <?= htmlspecialchars($alertMessage) ?>
-        </strong>
-
-    </small>
-
-
-    <button
-        type="button"
-        class="btn btn-<?= htmlspecialchars($alertLevel) ?> btn-sm w-100 add-bed-btn"
-        onclick="openAddBedModal(
-            '<?= htmlspecialchars($w['WARD_ID'], ENT_QUOTES) ?>',
-            '<?= htmlspecialchars($w['WARD_NAME'], ENT_QUOTES) ?>'
-        )"
-    >
-
-        ➕ Add Bed Now
-
-    </button>
 
 </div>
+
+
+
+<div class="ward-footer">
+
+
+<span class="occupancy-text">
+
+<?= $occupied ?>
+
+occupied
+
+&nbsp;•&nbsp;
+
+<?= $percentage ?>%
+
+</span>
+
+
+<span
+    class="
+        capacity-alert
+        <?= $alertClass ?>
+    "
+>
+
+<?= $alertText ?>
+
+</span>
+
+
+</div>
+
+
+
+<?php if (
+    $available <= 2
+    &&
+    $total > 0
+): ?>
+
+
+<button
+    type="button"
+    class="btn btn-outline-primary btn-sm w-100 mt-3"
+    onclick='openAddBedModal(
+        <?= json_encode(
+            (string)$ward[
+                'WARD_ID'
+            ]
+        ) ?>,
+        <?= json_encode(
+            $ward[
+                'WARD_NAME'
+            ]
+        ) ?>
+    )'
+>
+
+<i class="bi bi-plus-lg me-1"></i>
+
+Add Bed
+
+</button>
+
 
 <?php endif; ?>
 
-
-</div>
 
 </div>
 
@@ -1278,215 +3088,386 @@ elseif ($percentage >= 80 && $total > 0) {
 </div>
 
 
-<!-- =========================================================
-     FILTER
-========================================================= -->
 
-<form
-    method="GET"
-    class="mb-3"
+<!-- =====================================================
+     WARD FILTER
+===================================================== -->
+
+<div class="filter-box">
+
+
+<div class="filter-title">
+
+Filter Ward
+
+</div>
+
+
+<form method="GET">
+
+
+<div class="row g-2">
+
+
+<div class="col-lg-4">
+
+
+<select
+    name="ward"
+    class="form-select"
+    onchange="this.form.submit()"
 >
 
 
-<div class="row">
+<option value="All">
 
-    <div class="col-md-3">
+All Wards
 
-        <label class="form-label fw-semibold">
-            Select Ward
-        </label>
+</option>
 
 
-        <select
-            name="ward"
-            onchange="this.form.submit()"
-            class="form-control"
-        >
-
-            <option value="All">
-                All Ward
-            </option>
+<?php foreach (
+    $wards
+    as
+    $ward
+): ?>
 
 
-            <?php foreach ($wards as $w): ?>
+<option
+    value="<?= h(
+        $ward[
+            'WARD_ID'
+        ]
+    ) ?>"
+    <?=
+    (
+        (string)$ward_id
+        ===
+        (string)$ward[
+            'WARD_ID'
+        ]
+    )
+        ?
+        'selected'
+        :
+        ''
+    ?>
+>
 
-            <option
-                value="<?= htmlspecialchars($w['WARD_ID']) ?>"
-                <?= ($ward_id == $w['WARD_ID'])
-                    ? 'selected'
-                    : '' ?>
-            >
+<?= h(
+    $ward[
+        'WARD_NAME'
+    ]
+) ?>
 
-                <?= htmlspecialchars($w['WARD_NAME']) ?>
+</option>
 
-            </option>
 
-            <?php endforeach; ?>
+<?php endforeach; ?>
 
-        </select>
 
-    </div>
+</select>
+
 
 </div>
+
+
+</div>
+
 
 </form>
 
 
-<!-- =========================================================
-     BED GRID
-========================================================= -->
-
-<div class="ward-box">
+</div>
 
 
-<h5 class="mb-4">
 
-    <?php if ($ward_id === 'All'): ?>
+<!-- =====================================================
+     BED LAYOUT
+===================================================== -->
 
-        🏥 All Wards
+<div class="content-card">
 
-    <?php else: ?>
 
-        <?php
+<div class="card-heading">
 
-        $selectedWardName = '';
 
-        foreach ($wards as $w) {
+<div class="card-heading-left">
 
-            if ((string)$w['WARD_ID'] === (string)$ward_id) {
 
-                $selectedWardName = $w['WARD_NAME'];
+<div class="card-icon icon-layout">
 
-                break;
-            }
-        }
+<i class="bi bi-grid-3x3-gap"></i>
 
-        ?>
+</div>
 
-        🏥 <?= htmlspecialchars($selectedWardName) ?>
 
-    <?php endif; ?>
+<div>
+
+<h5 class="card-title-clean">
+
+<?= h(
+    $selectedWardName
+) ?>
 
 </h5>
+
+
+<div class="card-subtitle">
+
+<?= count(
+    $result
+) ?>
+
+bed(s) shown
+
+</div>
+
+
+</div>
+
+
+</div>
+
+
+</div>
+
 
 
 <div class="bed-grid">
 
 
-<?php if (empty($result)): ?>
+<?php if (
+    empty(
+        $result
+    )
+): ?>
 
-<div class="alert alert-info w-100">
 
-    <i class="bi bi-info-circle"></i>
+<div class="empty-state">
 
-    No beds found for this ward.
+
+<i class="bi bi-hospital"></i>
+
+
+No beds found for this ward.
+
 
 </div>
+
 
 <?php endif; ?>
 
 
-<?php foreach ($result as $row): ?>
+
+<?php foreach (
+    $result
+    as
+    $row
+): ?>
 
 
 <?php
 
-$statusClass =
-    ($row['STATUS'] === 'Available')
-        ? 'available'
-        : 'occupied';
+$isAvailable =
+    strtolower(
+        trim(
+            $row[
+                'STATUS'
+            ]
+        )
+    )
+    ===
+    'available';
+
+
+$cardClass =
+    $isAvailable
+        ?
+        'available-card'
+        :
+        'occupied-card';
 
 ?>
 
 
-<div class="bed-card <?= $statusClass ?>">
+<div
+    class="
+        bed-card
+        <?= $cardClass ?>
+    "
+>
 
 
-<!-- BED -->
+<!-- =================================================
+     HEADER
+================================================= -->
 
-<div style="font-size:50px;">
-    🛏️
+<div class="bed-card-header">
+
+
+<div class="d-flex align-items-center gap-2">
+
+
+<div class="bed-icon">
+
+<i class="bi bi-hospital"></i>
+
 </div>
 
 
-<strong>
-
-    <?= htmlspecialchars($row['BED_NUMBER'] ?? '') ?>
-
-</strong>
+<div>
 
 
-<br>
+<div class="bed-number">
+
+<?= h(
+    $row[
+        'BED_NUMBER'
+    ]
+) ?>
+
+</div>
 
 
-<?php if ($row['STATUS'] === 'Occupied'): ?>
+<div class="bed-ward">
 
-<span class="badge bg-danger">
+<?= h(
+    $row[
+        'WARD_NAME'
+    ]
+) ?>
 
-    Occupied
+</div>
+
+
+</div>
+
+
+</div>
+
+
+
+<?php if ($isAvailable): ?>
+
+
+<span class="status-pill status-available">
+
+<i class="bi bi-circle-fill" style="font-size:6px;"></i>
+
+Available
 
 </span>
+
 
 <?php else: ?>
 
-<span class="badge bg-success">
 
-    Available
+<span class="status-pill status-occupied">
+
+<i class="bi bi-circle-fill" style="font-size:6px;"></i>
+
+Occupied
 
 </span>
+
 
 <?php endif; ?>
 
 
-<div class="details">
+</div>
 
 
-<?php if ($row['STATUS'] === 'Available'): ?>
+
+<!-- =================================================
+     AVAILABLE
+================================================= -->
+
+<?php if ($isAvailable): ?>
 
 
-<div class="text-muted mt-2">
+<div class="empty-bed">
 
-    No patient
+
+<i class="bi bi-person-x"></i>
+
+
+No patient assigned
+
 
 </div>
 
 
+<!-- =================================================
+     OCCUPIED
+================================================= -->
+
 <?php else: ?>
 
 
-<strong>
-
-    <?= htmlspecialchars($row['NAME'] ?? 'Unknown Patient') ?>
-
-</strong>
+<div class="patient-box">
 
 
-<br>
+<div class="patient-name">
 
+<?= h(
+    $row[
+        'NAME'
+    ]
+    ??
+    'Unknown Patient'
+) ?>
+
+</div>
+
+
+<div class="patient-meta">
+
+
+<span>
+
+<i class="bi bi-calendar3"></i>
 
 Age:
-
-<?= htmlspecialchars(
-    (string)($row['AGE'] ?? 'N/A')
+<?= h(
+    $row[
+        'AGE'
+    ]
+    ??
+    'N/A'
 ) ?>
 
+</span>
 
-<br>
 
+<span>
 
-Gender:
+<i class="bi bi-person"></i>
 
-<?= htmlspecialchars(
-    $row['GENDER'] ?? 'N/A'
+<?= h(
+    $row[
+        'GENDER'
+    ]
+    ??
+    'N/A'
 ) ?>
 
+</span>
 
-<hr>
+
+</div>
 
 
-<!-- =====================================================
-     TRANSFER FORM
-===================================================== -->
+</div>
+
+
+
+<!-- =================================================
+     TRANSFER
+================================================= -->
+
+<div class="transfer-box">
+
 
 <form method="POST">
 
@@ -1494,8 +3475,11 @@ Gender:
 <input
     type="hidden"
     name="admission_id"
-    value="<?= htmlspecialchars(
-        (string)($row['ADMISSION_ID'] ?? '')
+    value="<?= h(
+        $row[
+            'ADMISSION_ID'
+        ]
+        ?? ''
     ) ?>"
 >
 
@@ -1503,63 +3487,63 @@ Gender:
 <input
     type="hidden"
     name="current_ward"
-    value="<?= htmlspecialchars($ward_id) ?>"
+    value="<?= h(
+        $ward_id
+    ) ?>"
 >
 
 
-<label class="form-label small fw-semibold">
+<label class="transfer-label">
 
-    Move Patient To
+Transfer Patient
 
 </label>
 
 
+<div class="transfer-row">
+
+
 <select
     name="new_bed"
-    class="form-control form-control-sm mb-2"
+    class="form-select"
     required
 >
 
+
 <option value="">
 
-    Select Available Bed
+Select available bed
 
 </option>
 
 
-<?php
-
-$bedsStmt = $conn->query("
-    SELECT
-        BED_ID,
-        BED_NUMBER,
-        WARD_ID
-    FROM SYARMIMI.BED
-    WHERE STATUS = 'Available'
-    ORDER BY WARD_ID, BED_ID
-");
-
-$availableBeds = $bedsStmt->fetchAll(PDO::FETCH_ASSOC);
-
-?>
-
-
-<?php foreach ($availableBeds as $b): ?>
-
-<?php
-
-if ((string)$b['BED_ID'] === (string)$row['BED_ID']) {
-    continue;
-}
-
-?>
+<?php foreach (
+    $availableBeds
+    as
+    $availableBed
+): ?>
 
 
 <option
-    value="<?= htmlspecialchars($b['BED_ID']) ?>"
+    value="<?= h(
+        $availableBed[
+            'BED_ID'
+        ]
+    ) ?>"
 >
 
-    <?= htmlspecialchars($b['BED_NUMBER']) ?>
+<?= h(
+    $availableBed[
+        'BED_NUMBER'
+    ]
+) ?>
+
+•
+<?= h(
+    $availableBed[
+        'WARD_NAME'
+    ]
+) ?>
 
 </option>
 
@@ -1573,44 +3557,58 @@ if ((string)$b['BED_ID'] === (string)$row['BED_ID']) {
 <button
     type="submit"
     name="transfer"
-    class="btn btn-warning btn-sm w-100"
+    class="btn-transfer transferBtn"
+    data-patient="<?= h(
+        $row[
+            'NAME'
+        ]
+        ?? ''
+    ) ?>"
 >
 
-    <i class="bi bi-arrow-left-right"></i>
-
-    Transfer
+<i class="bi bi-arrow-left-right"></i>
 
 </button>
+
+
+</div>
 
 
 </form>
 
 
+</div>
+
+
 <?php endif; ?>
 
 
-<hr>
+
+<!-- =================================================
+     FOOTER
+================================================= -->
+
+<div class="bed-footer">
 
 
-<div class="small text-muted">
+<div class="history-text">
 
-    🛏️ Admission History:
+Admission History:
 
-    <strong>
+<strong>
 
-        <?= (int)($row['TOTAL_HISTORY'] ?? 0) ?>
+<?= (int)(
+    $row[
+        'TOTAL_HISTORY'
+    ]
+    ?? 0
+) ?>
 
-    </strong>
+</strong>
 
 </div>
 
 
-<br>
-
-
-<!-- =====================================================
-     DELETE BED
-===================================================== -->
 
 <form
     method="POST"
@@ -1621,30 +3619,51 @@ if ((string)$b['BED_ID'] === (string)$row['BED_ID']) {
 <input
     type="hidden"
     name="delete_bed"
-    value="<?= htmlspecialchars($row['BED_ID']) ?>"
+    value="<?= h(
+        $row[
+            'BED_ID'
+        ]
+    ) ?>"
 >
 
 
 <input
     type="hidden"
     name="current_ward"
-    value="<?= htmlspecialchars($ward_id) ?>"
+    value="<?= h(
+        $ward_id
+    ) ?>"
 >
 
 
 <button
     type="submit"
-    class="btn btn-danger btn-sm w-100"
-    <?= ($row['STATUS'] === 'Occupied')
-        ? 'disabled'
-        : '' ?>
+    class="btn-delete-bed"
+    <?=
+    !$isAvailable
+        ?
+        'disabled'
+        :
+        ''
+    ?>
+    title="<?=
+    !$isAvailable
+        ?
+        'Occupied beds cannot be deleted'
+        :
+        'Delete bed'
+    ?>"
 >
 
-    <i class="bi bi-trash"></i>
+<i class="bi bi-trash"></i>
 
-    <?= ($row['STATUS'] === 'Occupied')
-        ? 'Bed Occupied'
-        : 'Delete Bed' ?>
+<?=
+$isAvailable
+    ?
+    'Delete'
+    :
+    'Occupied'
+?>
 
 </button>
 
@@ -1654,6 +3673,7 @@ if ((string)$b['BED_ID'] === (string)$row['BED_ID']) {
 
 </div>
 
+
 </div>
 
 
@@ -1662,17 +3682,20 @@ if ((string)$b['BED_ID'] === (string)$row['BED_ID']) {
 
 </div>
 
+
+</div>
+
+
 </div>
 
 
 </div>
 
-</div>
 
 
-<!-- =========================================================
+<!-- =====================================================
      ADD BED MODAL
-========================================================= -->
+===================================================== -->
 
 <div
     class="modal fade"
@@ -1682,36 +3705,43 @@ if ((string)$b['BED_ID'] === (string)$row['BED_ID']) {
 >
 
 
-<div class="modal-dialog">
+<div
+    class="
+        modal-dialog
+        modal-dialog-centered
+    "
+>
 
 
 <div class="modal-content">
 
 
-<div
-    class="modal-header"
-    style="
-        background:
-        linear-gradient(
-            135deg,
-            #667eea 0%,
-            #764ba2 100%
-        );
-        color:white;
-    "
->
+<div class="modal-header">
+
+
+<div>
 
 
 <h5 class="modal-title">
 
-    ➕ Add New Bed
+Add New Bed
 
 </h5>
 
 
+<div class="card-subtitle">
+
+Add additional bed capacity to this ward.
+
+</div>
+
+
+</div>
+
+
 <button
     type="button"
-    class="btn-close btn-close-white"
+    class="btn-close"
     data-bs-dismiss="modal"
 ></button>
 
@@ -1722,32 +3752,15 @@ if ((string)$b['BED_ID'] === (string)$row['BED_ID']) {
 <div class="modal-body">
 
 
-<form
-    method="POST"
-    id="addBedForm"
->
+<form method="POST">
 
 
 <input
     type="hidden"
     name="current_ward"
-    value="<?= htmlspecialchars($ward_id) ?>"
->
-
-
-<div class="mb-3">
-
-<label class="form-label">
-    Ward
-</label>
-
-
-<input
-    type="text"
-    id="modalWardName"
-    class="form-control"
-    readonly
-    style="background-color:#f8f9fa;"
+    value="<?= h(
+        $ward_id
+    ) ?>"
 >
 
 
@@ -1758,13 +3771,35 @@ if ((string)$b['BED_ID'] === (string)$row['BED_ID']) {
 >
 
 
+<div class="mb-3">
+
+
+<label class="form-label">
+
+Ward
+
+</label>
+
+
+<input
+    type="text"
+    id="modalWardName"
+    class="form-control"
+    readonly
+>
+
+
 </div>
+
 
 
 <div class="mb-3">
 
+
 <label class="form-label">
-    Bed Number
+
+Bed Number
+
 </label>
 
 
@@ -1772,7 +3807,7 @@ if ((string)$b['BED_ID'] === (string)$row['BED_ID']) {
     type="text"
     name="bed_number"
     class="form-control"
-    placeholder="Enter bed number"
+    placeholder="Example: B105"
     required
 >
 
@@ -1780,15 +3815,16 @@ if ((string)$b['BED_ID'] === (string)$row['BED_ID']) {
 </div>
 
 
+
 <button
     type="submit"
     name="add_bed"
-    class="btn btn-success w-100"
+    class="btn btn-add btn-main w-100"
 >
 
-    <i class="bi bi-plus-circle"></i>
+<i class="bi bi-plus-circle me-1"></i>
 
-    Add Bed
+Add Bed
 
 </button>
 
@@ -1798,16 +3834,16 @@ if ((string)$b['BED_ID'] === (string)$row['BED_ID']) {
 
 </div>
 
-</div>
 
 </div>
 
+
 </div>
 
 
-<!-- =========================================================
-     BOOTSTRAP JS
-========================================================= -->
+</div>
+
+
 
 <script
     src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"
@@ -1816,233 +3852,338 @@ if ((string)$b['BED_ID'] === (string)$row['BED_ID']) {
 
 <script>
 
-/*
-|--------------------------------------------------------------------------
-| ADD BED MODAL
-|--------------------------------------------------------------------------
-*/
+/* =========================================================
+   ADD BED MODAL
+========================================================= */
 
-function openAddBedModal(wardId, wardName)
+function openAddBedModal(
+    wardId,
+    wardName
+)
 {
-    document.getElementById('modalWardId').value = wardId;
 
-    document.getElementById('modalWardName').value = wardName;
+    document
+        .getElementById(
+            'modalWardId'
+        )
+        .value =
+        wardId;
 
-    const modalElement =
-        document.getElementById('addBedModal');
+
+    document
+        .getElementById(
+            'modalWardName'
+        )
+        .value =
+        wardName;
+
 
     const modal =
-        new bootstrap.Modal(modalElement);
+        new bootstrap.Modal(
+            document.getElementById(
+                'addBedModal'
+            )
+        );
+
 
     modal.show();
+
 }
 
 
-/*
-|--------------------------------------------------------------------------
-| DELETE CONFIRMATION
-|--------------------------------------------------------------------------
-*/
+/* =========================================================
+   READY
+========================================================= */
 
 document.addEventListener(
     'DOMContentLoaded',
     function()
     {
 
-        const deleteForms =
-            document.querySelectorAll(
+        /* =================================================
+           DELETE CONFIRM
+        ================================================= */
+
+        document
+            .querySelectorAll(
                 '.delete-bed-form'
+            )
+            .forEach(
+                function(form)
+                {
+
+                    form.addEventListener(
+                        'submit',
+                        function(event)
+                        {
+
+                            event.preventDefault();
+
+
+                            Swal.fire({
+
+                                icon:
+                                    'warning',
+
+                                title:
+                                    'Delete Bed?',
+
+                                text:
+                                    'This bed will be permanently removed.',
+
+                                showCancelButton:
+                                    true,
+
+                                confirmButtonText:
+                                    'Yes, Delete',
+
+                                cancelButtonText:
+                                    'Cancel',
+
+                                confirmButtonColor:
+                                    '#dc2626',
+
+                                cancelButtonColor:
+                                    '#64748b'
+
+                            })
+                            .then(
+                                function(result)
+                                {
+
+                                    if (
+                                        result.isConfirmed
+                                    ) {
+
+                                        form.submit();
+
+                                    }
+
+                                }
+                            );
+
+                        }
+                    );
+
+                }
             );
 
 
-        deleteForms.forEach(
-            function(form)
-            {
+        /* =================================================
+           TRANSFER CONFIRM
+        ================================================= */
 
-                form.addEventListener(
-                    'submit',
-                    function(event)
-                    {
+        document
+            .querySelectorAll(
+                '.transferBtn'
+            )
+            .forEach(
+                function(button)
+                {
 
-                        event.preventDefault();
+                    button.addEventListener(
+                        'click',
+                        function(event)
+                        {
+
+                            const form =
+                                this.closest(
+                                    'form'
+                                );
 
 
-                        Swal.fire({
+                            const select =
+                                form.querySelector(
+                                    'select[name="new_bed"]'
+                                );
 
-                            title: 'Delete Bed?',
 
-                            text:
-                                'This action cannot be undone.',
+                            if (
+                                !select.value
+                            ) {
 
-                            icon: 'warning',
+                                return;
+                            }
 
-                            showCancelButton: true,
 
-                            confirmButtonColor:
-                                '#dc3545',
+                            event.preventDefault();
 
-                            cancelButtonColor:
-                                '#6c757d',
 
-                            confirmButtonText:
-                                'Yes, Delete Bed',
+                            const patientName =
+                                this.dataset.patient
+                                ||
+                                'this patient';
 
-                            cancelButtonText:
-                                'Cancel'
 
-                        }).then(
-                            function(result)
-                            {
+                            Swal.fire({
 
-                                if (
-                                    result.isConfirmed
-                                ) {
+                                icon:
+                                    'question',
 
-                                    form.submit();
+                                title:
+                                    'Transfer Patient?',
+
+                                html:
+                                    'Move <strong>'
+                                    +
+                                    escapeHtml(
+                                        patientName
+                                    )
+                                    +
+                                    '</strong> to the selected bed?',
+
+                                showCancelButton:
+                                    true,
+
+                                confirmButtonText:
+                                    'Yes, Transfer',
+
+                                cancelButtonText:
+                                    'Cancel',
+
+                                confirmButtonColor:
+                                    '#2563eb',
+
+                                cancelButtonColor:
+                                    '#64748b'
+
+                            })
+                            .then(
+                                function(result)
+                                {
+
+                                    if (
+                                        result.isConfirmed
+                                    ) {
+
+                                        /*
+                                         Add hidden transfer field because
+                                         requestSubmit/button.click is avoided
+                                         after Swal confirmation.
+                                        */
+
+                                        const input =
+                                            document.createElement(
+                                                'input'
+                                            );
+
+
+                                        input.type =
+                                            'hidden';
+
+
+                                        input.name =
+                                            'transfer';
+
+
+                                        input.value =
+                                            '1';
+
+
+                                        form.appendChild(
+                                            input
+                                        );
+
+
+                                        form.submit();
+
+                                    }
 
                                 }
+                            );
 
-                            }
-                        );
+                        }
+                    );
 
-                    }
-                );
-
-            }
-        );
+                }
+            );
 
 
-        /*
-        |--------------------------------------------------------------------------
-        | SHOW REDIRECT MESSAGE
-        |--------------------------------------------------------------------------
-        */
+        /* =================================================
+           REDIRECT MESSAGE
+        ================================================= */
 
-        <?php if ($message !== ''): ?>
+        <?php if (
+            $message !== ''
+        ): ?>
+
 
         Swal.fire({
 
             icon:
-                '<?= htmlspecialchars($messageType, ENT_QUOTES) ?>',
+                <?= json_encode(
+                    in_array(
+                        $messageType,
+                        [
+                            'success',
+                            'warning',
+                            'error',
+                            'info'
+                        ],
+                        true
+                    )
+                        ?
+                        $messageType
+                        :
+                        'info'
+                ) ?>,
 
             title:
-                <?=
-                $messageType === 'success'
-                    ? "'Success'"
-                    : (
-                        $messageType === 'warning'
-                            ? "'Warning'"
-                            : "'Error'"
-                    )
-                ?>,
+                <?= json_encode(
+                    $messageType ===
+                    'success'
+                        ?
+                        'Success'
+                        :
+                        (
+                            $messageType ===
+                            'warning'
+                                ?
+                                'Warning'
+                                :
+                                'Error'
+                        )
+                ) ?>,
 
             text:
-                <?= json_encode($message) ?>,
+                <?= json_encode(
+                    $message
+                ) ?>,
 
             confirmButtonColor:
-                '<?= $messageType === 'success'
-                    ? '#198754'
-                    : (
-                        $messageType === 'warning'
-                            ? '#ffc107'
-                            : '#dc3545'
-                    ) ?>'
+                '#2563eb'
 
         });
 
-        <?php endif; ?>
-
-
-        /*
-        |--------------------------------------------------------------------------
-        | LOW BED STOCK ALERT
-        |--------------------------------------------------------------------------
-        */
-
-        <?php foreach ($wardSummary as $w): ?>
-
-        <?php
-
-        $availableAlert =
-            (int)($w['AVAILABLE_BEDS'] ?? 0);
-
-        $totalAlert =
-            (int)($w['TOTAL_BED'] ?? 0);
-
-        ?>
-
-        <?php if (
-            $availableAlert <= 1 &&
-            $totalAlert > 0
-        ): ?>
-
-
-        setTimeout(
-            function()
-            {
-
-                Swal.fire({
-
-                    icon: 'warning',
-
-                    title:
-                        '⚠️ Low Bed Stock Alert!',
-
-                    html:
-                        'Ward <strong>' +
-                        <?= json_encode($w['WARD_NAME']) ?> +
-                        '</strong> has only <strong>' +
-                        <?= $availableAlert ?> +
-                        '</strong> available bed left.',
-
-                    confirmButtonText:
-                        'Add Bed Now',
-
-                    confirmButtonColor:
-                        '#dc3545',
-
-                    showCancelButton:
-                        true,
-
-                    cancelButtonText:
-                        'Dismiss'
-
-                }).then(
-                    function(result)
-                    {
-
-                        if (
-                            result.isConfirmed
-                        ) {
-
-                            openAddBedModal(
-
-                                <?= json_encode(
-                                    (string)$w['WARD_ID']
-                                ) ?>,
-
-                                <?= json_encode(
-                                    $w['WARD_NAME']
-                                ) ?>
-
-                            );
-
-                        }
-
-                    }
-                );
-
-            },
-            1000
-        );
-
 
         <?php endif; ?>
-
-        <?php endforeach; ?>
 
     }
 );
+
+
+/* =========================================================
+   ESCAPE HTML
+========================================================= */
+
+function escapeHtml(text)
+{
+
+    const div =
+        document.createElement(
+            'div'
+        );
+
+
+    div.textContent =
+        text
+        ??
+        '';
+
+
+    return div.innerHTML;
+
+}
 
 </script>
 

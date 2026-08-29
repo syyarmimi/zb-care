@@ -8,6 +8,36 @@ $messageType = "";
 
 
 /* =========================================================
+   APPOINTMENT BOOKING DATE RANGE
+
+   Patient can book:
+   - From TODAY
+   - Until maximum 3 months from TODAY
+========================================================= */
+
+$todayDateObject =
+    new DateTimeImmutable('today');
+
+
+$maxAppointmentDateObject =
+    $todayDateObject->modify(
+        '+3 months'
+    );
+
+
+$minimumAppointmentDate =
+    $todayDateObject->format(
+        'Y-m-d'
+    );
+
+
+$maximumAppointmentDate =
+    $maxAppointmentDateObject->format(
+        'Y-m-d'
+    );
+
+
+/* =========================================================
    HELPER FUNCTION
    Convert 08:00 AM -> 08:00
    Convert 02:00 PM -> 14:00
@@ -15,18 +45,79 @@ $messageType = "";
 
 function convertAppointmentTimeToSlot($time)
 {
-    $time = trim($time);
+    $time =
+        trim(
+            $time
+        );
 
-    $obj = DateTime::createFromFormat(
-        'h:i A',
-        $time
-    );
+
+    $obj =
+        DateTime::createFromFormat(
+            'h:i A',
+            $time
+        );
+
 
     if ($obj) {
-        return $obj->format('H:i');
+
+        return $obj->format(
+            'H:i'
+        );
     }
 
+
     return $time;
+}
+
+
+/* =========================================================
+   HELPER
+   Validate exact YYYY-MM-DD date
+========================================================= */
+
+function isValidAppointmentDate($date)
+{
+    $dateObject =
+        DateTimeImmutable::createFromFormat(
+            '!Y-m-d',
+            $date
+        );
+
+
+    if (!$dateObject) {
+
+        return false;
+    }
+
+
+    $errors =
+        DateTimeImmutable::getLastErrors();
+
+
+    /*
+       getLastErrors() may return false
+       when there are no errors.
+    */
+
+    if (
+        is_array($errors)
+        &&
+        (
+            $errors['warning_count'] > 0
+            ||
+            $errors['error_count'] > 0
+        )
+    ) {
+
+        return false;
+    }
+
+
+    return (
+        $dateObject->format('Y-m-d')
+        ===
+        $date
+    );
 }
 
 
@@ -34,7 +125,11 @@ function convertAppointmentTimeToSlot($time)
    BOOK APPOINTMENT
 ========================================================= */
 
-if (isset($_POST['book'])) {
+if (
+    isset(
+        $_POST['book']
+    )
+) {
 
     /* =====================================================
        GET FORM VALUES
@@ -42,38 +137,87 @@ if (isset($_POST['book'])) {
 
     $patient_name =
         strtoupper(
-            trim($_POST['patient_name'] ?? '')
+            trim(
+                $_POST['patient_name']
+                ??
+                ''
+            )
         );
 
+
     $ic_number =
-        trim($_POST['ic_number'] ?? '');
+        trim(
+            $_POST['ic_number']
+            ??
+            ''
+        );
+
 
     $gender =
-        trim($_POST['gender'] ?? '');
+        trim(
+            $_POST['gender']
+            ??
+            ''
+        );
+
 
     $phone =
-        trim($_POST['phone'] ?? '');
+        trim(
+            $_POST['phone']
+            ??
+            ''
+        );
+
 
     $email =
-        trim($_POST['email'] ?? '');
+        trim(
+            $_POST['email']
+            ??
+            ''
+        );
+
 
     $department =
-        trim($_POST['department'] ?? '');
+        trim(
+            $_POST['department']
+            ??
+            ''
+        );
+
 
     $appointment_date =
-        trim($_POST['appointment_date'] ?? '');
+        trim(
+            $_POST['appointment_date']
+            ??
+            ''
+        );
+
 
     $appointment_time =
-        trim($_POST['appointment_time'] ?? '');
+        trim(
+            $_POST['appointment_time']
+            ??
+            ''
+        );
+
 
     $address =
         strtoupper(
-            trim($_POST['address'] ?? '')
+            trim(
+                $_POST['address']
+                ??
+                ''
+            )
         );
+
 
     $notes =
         strtoupper(
-            trim($_POST['notes'] ?? '')
+            trim(
+                $_POST['notes']
+                ??
+                ''
+            )
         );
 
 
@@ -82,24 +226,38 @@ if (isset($_POST['book'])) {
     ===================================================== */
 
     if (
-        $patient_name === '' ||
-        $ic_number === '' ||
-        $gender === '' ||
-        $phone === '' ||
-        $email === '' ||
-        $department === '' ||
-        $appointment_date === '' ||
-        $appointment_time === '' ||
+        $patient_name === ''
+        ||
+        $ic_number === ''
+        ||
+        $gender === ''
+        ||
+        $phone === ''
+        ||
+        $email === ''
+        ||
+        $department === ''
+        ||
+        $appointment_date === ''
+        ||
+        $appointment_time === ''
+        ||
         $address === ''
     ) {
 
         $message =
             "Please complete all required fields.";
 
+
         $messageType =
             "danger";
-
     }
+
+
+    /* =====================================================
+       EMAIL VALIDATION
+    ===================================================== */
+
     elseif (
         !filter_var(
             $email,
@@ -110,311 +268,168 @@ if (isset($_POST['book'])) {
         $message =
             "Please enter a valid email address.";
 
+
         $messageType =
             "danger";
-
     }
+
+
+    /* =====================================================
+       DATE FORMAT VALIDATION
+    ===================================================== */
+
     elseif (
-        strtotime($appointment_date)
-        <
-        strtotime(date('Y-m-d'))
+        !isValidAppointmentDate(
+            $appointment_date
+        )
     ) {
 
         $message =
-            "Appointment date cannot be earlier than today.";
+            "Please select a valid appointment date.";
+
 
         $messageType =
             "danger";
-
     }
+
+
     else {
 
-        try {
+        /*
+           Convert selected date after
+           confirming YYYY-MM-DD is valid.
+        */
 
-            /* =================================================
-               START TRANSACTION
-            ================================================= */
+        $selectedAppointmentDateObject =
+            new DateTimeImmutable(
+                $appointment_date
+            );
 
-            $conn->beginTransaction();
 
+        /* =================================================
+           PAST DATE VALIDATION
+        ================================================= */
 
-            /* =================================================
-               CONVERT SLOT TIME
-            ================================================= */
+        if (
+            $selectedAppointmentDateObject
+            <
+            $todayDateObject
+        ) {
 
-            $slotTime =
-                convertAppointmentTimeToSlot(
-                    $appointment_time
-                );
+            $message =
+                "Appointment date cannot be earlier than today.";
 
 
-            /* =================================================
-               DUPLICATE CHECK
+            $messageType =
+                "danger";
+        }
 
-               Same:
-               - IC
-               - Department
-               - Date
-               - Time
 
-               Existing Approved/Pending appointment means
-               another booking is not allowed.
-            ================================================= */
+        /* =================================================
+           MAXIMUM 3 MONTH VALIDATION
 
-            $duplicateStmt =
-                $conn->prepare("
+           IMPORTANT:
+           Even if user manually removes HTML max=""
+           using browser developer tools,
+           backend will still reject the booking.
+        ================================================= */
 
-                    SELECT
+        elseif (
+            $selectedAppointmentDateObject
+            >
+            $maxAppointmentDateObject
+        ) {
 
-                        APPOINTMENT_ID,
-                        APPOINTMENT_DATE,
-                        APPOINTMENT_TIME,
-                        STATUS,
-                        DOCTOR_NAME
+            $message =
 
-                    FROM SYARMIMI.APPOINTMENT
+                "Appointments can only be booked up to 3 months in advance. "
+                .
+                "Please select a date between "
+                .
+                $todayDateObject->format('d M Y')
+                .
+                " and "
+                .
+                $maxAppointmentDateObject->format('d M Y')
+                .
+                ".";
 
-                    WHERE
 
-                        REPLACE(
-                            TRIM(IC_NUMBER),
-                            '-',
-                            ''
-                        )
-                        =
-                        REPLACE(
-                            TRIM(:ic_number),
-                            '-',
-                            ''
-                        )
+            $messageType =
+                "danger";
+        }
 
-                    AND
 
-                        UPPER(
-                            TRIM(DEPARTMENT)
-                        )
-                        =
-                        UPPER(
-                            TRIM(:department)
-                        )
+        /* =================================================
+           DATE IS ALLOWED
+        ================================================= */
 
-                    AND
+        else {
 
-                        TRIM(APPOINTMENT_TIME)
-                        =
-                        TRIM(:appointment_time)
+            try {
 
-                    AND
+                /* =================================================
+                   START TRANSACTION
+                ================================================= */
 
-                        UPPER(
-                            TRIM(STATUS)
-                        )
-                        IN (
-                            'APPROVED',
-                            'PENDING'
-                        )
-
-                    ORDER BY
-                        APPOINTMENT_ID DESC
-
-                ");
-
-
-            $duplicateStmt->execute([
-
-                ':ic_number' =>
-                    $ic_number,
-
-                ':department' =>
-                    $department,
-
-                ':appointment_time' =>
-                    $appointment_time
-
-            ]);
-
-
-            $possibleDuplicates =
-                $duplicateStmt->fetchAll(
-                    PDO::FETCH_ASSOC
-                );
-
-
-            $existingAppointment =
-                null;
-
-
-            foreach (
-                $possibleDuplicates
-                as $possible
-            ) {
-
-                $databaseDate =
-                    trim(
-                        $possible[
-                            'APPOINTMENT_DATE'
-                        ] ?? ''
-                    );
-
-
-                $databaseTimestamp =
-                    strtotime(
-                        $databaseDate
-                    );
-
-
-                if (
-                    $databaseTimestamp !== false
-                    &&
-                    date(
-                        'Y-m-d',
-                        $databaseTimestamp
-                    )
-                    ===
-                    $appointment_date
-                ) {
-
-                    $existingAppointment =
-                        $possible;
-
-                    break;
-                }
-            }
-
-
-            /* =================================================
-               DUPLICATE FOUND
-            ================================================= */
-
-            if ($existingAppointment) {
-
-                if ($conn->inTransaction()) {
-                    $conn->rollBack();
-                }
-
-
-                $displayDate =
-                    date(
-                        'd M Y',
-                        strtotime(
-                            $appointment_date
-                        )
-                    );
-
-
-                $message =
-
-                    "You already have an appointment for " .
-
-                    $department .
-
-                    " on " .
-
-                    $displayDate .
-
-                    " at " .
-
-                    $appointment_time;
-
-
-                if (
-                    !empty(
-                        $existingAppointment[
-                            'DOCTOR_NAME'
-                        ]
-                    )
-                ) {
-
-                    $message .=
-
-                        ". Assigned Doctor: " .
-
-                        $existingAppointment[
-                            'DOCTOR_NAME'
-                        ];
-                }
-
-
-                $message .= ".";
-
-
-                $messageType =
-                    "warning";
-
-            }
-
-
-            /* =================================================
-               CONTINUE BOOKING
-            ================================================= */
-
-            else {
+                $conn->beginTransaction();
 
 
                 /* =================================================
-                   FIND AVAILABLE DOCTOR
+                   CONVERT SLOT TIME
                 ================================================= */
 
-                $doctorStmt =
+                $slotTime =
+                    convertAppointmentTimeToSlot(
+                        $appointment_time
+                    );
+
+
+                /* =================================================
+                   DUPLICATE CHECK
+
+                   Same:
+                   - IC
+                   - Department
+                   - Date
+                   - Time
+
+                   Existing Approved/Pending appointment means
+                   another booking is not allowed.
+                ================================================= */
+
+                $duplicateStmt =
                     $conn->prepare("
 
                         SELECT
 
-                            HS.ACCOUNT_ID,
-
-                            HS.USERNAME,
-
-                            DS.SLOT_ID,
-
-                            NVL(
-                                DS.MAX_PATIENT,
-                                1
-                            ) AS MAX_PATIENT,
-
-                            NVL(
-                                DS.CURRENT_PATIENT,
-                                0
-                            ) AS CURRENT_PATIENT
+                            APPOINTMENT_ID,
+                            APPOINTMENT_DATE,
+                            APPOINTMENT_TIME,
+                            STATUS,
+                            DOCTOR_NAME
 
                         FROM
-                            SYARMIMI.HOSPITAL_STAFF HS
-
-                        JOIN
-                            SYARMIMI.DOCTOR_AVAILABILITY DA
-
-                            ON
-                            TO_CHAR(
-                                HS.ACCOUNT_ID
-                            )
-                            =
-                            TO_CHAR(
-                                DA.ACCOUNT_ID
-                            )
-
-                        JOIN
-                            SYARMIMI.DOCTOR_SLOT DS
-
-                            ON
-                            TO_CHAR(
-                                HS.ACCOUNT_ID
-                            )
-                            =
-                            TO_CHAR(
-                                DS.ACCOUNT_ID
-                            )
+                            SYARMIMI.APPOINTMENT
 
                         WHERE
 
-                            UPPER(
-                                TRIM(HS.ROLE)
+                            REPLACE(
+                                TRIM(IC_NUMBER),
+                                '-',
+                                ''
                             )
                             =
-                            'DOCTOR'
+                            REPLACE(
+                                TRIM(:ic_number),
+                                '-',
+                                ''
+                            )
 
                         AND
 
                             UPPER(
-                                TRIM(HS.DEPARTMENT)
+                                TRIM(DEPARTMENT)
                             )
                             =
                             UPPER(
@@ -423,766 +438,106 @@ if (isset($_POST['book'])) {
 
                         AND
 
-                            TRUNC(
-                                DA.AVAILABLE_DATE
-                            )
+                            TRIM(APPOINTMENT_TIME)
                             =
-                            TO_DATE(
-                                :available_date,
-                                'YYYY-MM-DD'
-                            )
+                            TRIM(:appointment_time)
 
                         AND
 
                             UPPER(
-                                TRIM(DA.STATUS)
+                                TRIM(STATUS)
                             )
-                            =
-                            'AVAILABLE'
-
-                        AND
-
-                            TRUNC(
-                                DS.SLOT_DATE
-                            )
-                            =
-                            TO_DATE(
-                                :slot_date,
-                                'YYYY-MM-DD'
-                            )
-
-                        AND
-
-                            TRIM(
-                                DS.SLOT_TIME
-                            )
-                            =
-                            :slot_time
-
-                        AND
-
-                            UPPER(
-                                TRIM(DS.STATUS)
-                            )
-                            =
-                            'AVAILABLE'
-
-                        AND
-
-                            NVL(
-                                DS.CURRENT_PATIENT,
-                                0
-                            )
-                            <
-                            NVL(
-                                DS.MAX_PATIENT,
-                                1
+                            IN
+                            (
+                                'APPROVED',
+                                'PENDING'
                             )
 
                         ORDER BY
-
-                            NVL(
-                                DS.CURRENT_PATIENT,
-                                0
-                            ) ASC,
-
-                            HS.ACCOUNT_ID ASC
+                            APPOINTMENT_ID DESC
 
                     ");
 
 
-                $doctorStmt->execute([
+                $duplicateStmt->execute([
+
+                    ':ic_number' =>
+                        $ic_number,
 
                     ':department' =>
                         $department,
 
-                    ':available_date' =>
-                        $appointment_date,
-
-                    ':slot_date' =>
-                        $appointment_date,
-
-                    ':slot_time' =>
-                        $slotTime
+                    ':appointment_time' =>
+                        $appointment_time
 
                 ]);
 
 
-                $doctorCandidates =
-                    $doctorStmt->fetchAll(
+                $possibleDuplicates =
+                    $duplicateStmt->fetchAll(
                         PDO::FETCH_ASSOC
                     );
 
 
-                $selectedDoctor =
+                $existingAppointment =
                     null;
 
 
-                /* =================================================
-                   SELECT ONE DOCTOR ONLY
-                ================================================= */
-
                 foreach (
-                    $doctorCandidates
-                    as $candidate
+                    $possibleDuplicates
+                    as
+                    $possible
                 ) {
 
-                    $lockStmt =
-                        $conn->prepare("
-
-                            SELECT
-
-                                SLOT_ID,
-
-                                NVL(
-                                    MAX_PATIENT,
-                                    1
-                                ) AS MAX_PATIENT,
-
-                                NVL(
-                                    CURRENT_PATIENT,
-                                    0
-                                ) AS CURRENT_PATIENT,
-
-                                STATUS
-
-                            FROM SYARMIMI.DOCTOR_SLOT
-
-                            WHERE
-                                SLOT_ID =
-                                :slot_id
-
-                            FOR UPDATE
-
-                        ");
-
-
-                    $lockStmt->execute([
-
-                        ':slot_id' =>
-                            $candidate[
-                                'SLOT_ID'
+                    $databaseDate =
+                        trim(
+                            $possible[
+                                'APPOINTMENT_DATE'
                             ]
-
-                    ]);
-
-
-                    $slot =
-                        $lockStmt->fetch(
-                            PDO::FETCH_ASSOC
+                            ??
+                            ''
                         );
 
 
-                    if (!$slot) {
-                        continue;
-                    }
-
-
-                    $currentPatient =
-                        (int)(
-                            $slot[
-                                'CURRENT_PATIENT'
-                            ] ?? 0
-                        );
-
-
-                    $maxPatient =
-                        (int)(
-                            $slot[
-                                'MAX_PATIENT'
-                            ] ?? 1
-                        );
-
-
-                    $slotStatus =
-                        strtoupper(
-                            trim(
-                                $slot[
-                                    'STATUS'
-                                ] ?? ''
-                            )
+                    $databaseTimestamp =
+                        strtotime(
+                            $databaseDate
                         );
 
 
                     if (
-                        $slotStatus ===
-                        'AVAILABLE'
+                        $databaseTimestamp !== false
                         &&
-                        $currentPatient <
-                        $maxPatient
+                        date(
+                            'Y-m-d',
+                            $databaseTimestamp
+                        )
+                        ===
+                        $appointment_date
                     ) {
 
-                        $selectedDoctor =
-                            $candidate;
+                        $existingAppointment =
+                            $possible;
 
 
-                        $selectedDoctor[
-                            'CURRENT_PATIENT'
-                        ] =
-                            $currentPatient;
-
-
-                        $selectedDoctor[
-                            'MAX_PATIENT'
-                        ] =
-                            $maxPatient;
-
-
-                        /*
-                         * STOP after ONE doctor is selected.
-                         */
                         break;
                     }
                 }
 
 
                 /* =================================================
-                   DOCTOR FOUND
-                   AUTO APPROVE
+                   DUPLICATE FOUND
                 ================================================= */
 
-                if ($selectedDoctor) {
-
-                    $doctorAccountId =
-                        $selectedDoctor[
-                            'ACCOUNT_ID'
-                        ];
-
-
-                    $rawDoctorName =
-                        trim(
-                            $selectedDoctor[
-                                'USERNAME'
-                            ]
-                        );
-
-
-                    /* =============================================
-                       PREVENT "Dr. Dr. ..."
-                    ============================================= */
+                if (
+                    $existingAppointment
+                ) {
 
                     if (
-                        stripos(
-                            $rawDoctorName,
-                            'Dr.'
-                        ) === 0
+                        $conn->inTransaction()
                     ) {
 
-                        $doctorName =
-                            $rawDoctorName;
-
-                    }
-                    else {
-
-                        $doctorName =
-                            'Dr. ' .
-                            $rawDoctorName;
-
-                    }
-
-
-                    /* =============================================
-                       INSERT APPOINTMENT ONCE
-                    ============================================= */
-
-                    $insertStmt =
-                        $conn->prepare("
-
-                            INSERT INTO
-                                SYARMIMI.APPOINTMENT
-                            (
-                                APPOINTMENT_ID,
-                                PATIENT_NAME,
-                                IC_NUMBER,
-                                GENDER,
-                                PHONE,
-                                EMAIL,
-                                DEPARTMENT,
-                                APPOINTMENT_DATE,
-                                NOTES,
-                                STATUS,
-                                DOCTOR_NAME,
-                                ACCOUNT_ID,
-                                APPOINTMENT_TIME,
-                                ADDRESS
-                            )
-
-                            VALUES
-                            (
-                                SYARMIMI.APPOINTMENT_SEQ.NEXTVAL,
-
-                                :patient_name,
-                                :ic_number,
-                                :gender,
-                                :phone,
-                                :email,
-                                :department,
-
-                                TO_DATE(
-                                    :appointment_date,
-                                    'YYYY-MM-DD'
-                                ),
-
-                                :notes,
-
-                                'Approved',
-
-                                :doctor_name,
-                                :account_id,
-                                :appointment_time,
-                                :address
-                            )
-
-                        ");
-
-
-                    $insertStmt->execute([
-
-                        ':patient_name' =>
-                            $patient_name,
-
-                        ':ic_number' =>
-                            $ic_number,
-
-                        ':gender' =>
-                            $gender,
-
-                        ':phone' =>
-                            $phone,
-
-                        ':email' =>
-                            $email,
-
-                        ':department' =>
-                            $department,
-
-                        ':appointment_date' =>
-                            $appointment_date,
-
-                        ':notes' =>
-                            $notes,
-
-                        ':doctor_name' =>
-                            $doctorName,
-
-                        ':account_id' =>
-                            $doctorAccountId,
-
-                        ':appointment_time' =>
-                            $appointment_time,
-
-                        ':address' =>
-                            $address
-
-                    ]);
-
-
-                    /* =============================================
-                       GET NEW APPOINTMENT ID
-                    ============================================= */
-
-                    $newAppointmentId =
-                        $conn->query("
-
-                            SELECT
-                                SYARMIMI.APPOINTMENT_SEQ.CURRVAL
-
-                            FROM DUAL
-
-                        ")->fetchColumn();
-
-
-                    /* =============================================
-                       UPDATE SELECTED SLOT ONLY
-                    ============================================= */
-
-                    $newCurrentPatient =
-                        (int)$selectedDoctor[
-                            'CURRENT_PATIENT'
-                        ]
-                        + 1;
-
-
-                    $maxPatient =
-                        (int)$selectedDoctor[
-                            'MAX_PATIENT'
-                        ];
-
-
-                    $newSlotStatus =
-                        (
-                            $newCurrentPatient
-                            >=
-                            $maxPatient
-                        )
-                        ? 'Booked'
-                        : 'Available';
-
-
-                    $updateSlot =
-                        $conn->prepare("
-
-                            UPDATE
-                                SYARMIMI.DOCTOR_SLOT
-
-                            SET
-
-                                CURRENT_PATIENT =
-                                    :current_patient,
-
-                                STATUS =
-                                    :status,
-
-                                APPOINTMENT_ID =
-                                    :appointment
-
-                            WHERE
-                                SLOT_ID =
-                                :slot
-
-                        ");
-
-
-                    $updateSlot->execute([
-
-                        ':current_patient' =>
-                            $newCurrentPatient,
-
-                        ':status' =>
-                            $newSlotStatus,
-
-                        ':appointment' =>
-                            $newAppointmentId,
-
-                        ':slot' =>
-                            $selectedDoctor[
-                                'SLOT_ID'
-                            ]
-
-                    ]);
-
-
-                    /* =============================================
-                       DOCTOR NOTIFICATION
-                    ============================================= */
-
-                    $notificationStmt =
-                        $conn->prepare("
-
-                            INSERT INTO
-                                SYARMIMI.APPOINTMENT_NOTIFICATION
-                            (
-                                NOTIFICATION_ID,
-                                ACCOUNT_ID,
-                                MESSAGE,
-                                IS_READ,
-                                CREATED_AT
-                            )
-
-                            VALUES
-                            (
-                                SYARMIMI.NOTIF_SEQ.NEXTVAL,
-
-                                :doctor,
-
-                                :message,
-
-                                0,
-
-                                SYSDATE
-                            )
-
-                        ");
-
-
-                    $notificationMessage =
-
-                        'New appointment assigned: ' .
-
-                        $patient_name .
-
-                        ' on ' .
-
-                        date(
-                            'd M Y',
-                            strtotime(
-                                $appointment_date
-                            )
-                        ) .
-
-                        ' at ' .
-
-                        $appointment_time;
-
-
-                    $notificationStmt->execute([
-
-                        ':doctor' =>
-                            $doctorAccountId,
-
-                        ':message' =>
-                            $notificationMessage
-
-                    ]);
-
-
-                    /* =============================================
-                       COMMIT DATABASE FIRST
-                    ============================================= */
-
-                    $conn->commit();
-
-
-                    /* =============================================
-                       SEND APPROVAL EMAIL
-                       Uses old working 5-parameter function.
-                    ============================================= */
-
-                    $emailSent =
-                        false;
-
-
-                    try {
-
-                        $emailSent =
-                            sendAppointmentApprovalEmail(
-
-                                $email,
-
-                                $patient_name,
-
-                                $doctorName,
-
-                                $appointment_date,
-
-                                $appointment_time
-
-                            );
-
-                    }
-                    catch (
-                        Throwable $mailError
-                    ) {
-
-                        error_log(
-
-                            "Approval email error: " .
-
-                            $mailError->getMessage()
-
-                        );
-
-
-                        $emailSent =
-                            false;
-
-                    }
-
-
-                    /* =============================================
-                       DISPLAY MESSAGE
-                    ============================================= */
-
-                    $displayDate =
-                        date(
-                            'd M Y',
-                            strtotime(
-                                $appointment_date
-                            )
-                        );
-
-
-                    if ($emailSent) {
-
-                        $message =
-
-                            "Your appointment has been automatically approved. " .
-
-                            "Assigned Doctor: " .
-
-                            $doctorName .
-
-                            ". Date: " .
-
-                            $displayDate .
-
-                            ". Time: " .
-
-                            $appointment_time .
-
-                            ". Confirmation email has been sent to " .
-
-                            $email .
-
-                            ".";
-
-                    }
-                    else {
-
-                        $message =
-
-                            "Your appointment has been automatically approved. " .
-
-                            "Assigned Doctor: " .
-
-                            $doctorName .
-
-                            ". Date: " .
-
-                            $displayDate .
-
-                            ". Time: " .
-
-                            $appointment_time .
-
-                            ". However, the confirmation email could not be sent.";
-
-                    }
-
-
-                    $messageType =
-                        "success";
-
-                }
-
-
-                /* =================================================
-                   NO AVAILABLE DOCTOR
-                   AUTO REJECT
-                ================================================= */
-
-                else {
-
-                    $rejectStmt =
-                        $conn->prepare("
-
-                            INSERT INTO
-                                SYARMIMI.APPOINTMENT
-                            (
-                                APPOINTMENT_ID,
-                                PATIENT_NAME,
-                                IC_NUMBER,
-                                GENDER,
-                                PHONE,
-                                EMAIL,
-                                DEPARTMENT,
-                                APPOINTMENT_DATE,
-                                NOTES,
-                                STATUS,
-                                DOCTOR_NAME,
-                                ACCOUNT_ID,
-                                APPOINTMENT_TIME,
-                                ADDRESS
-                            )
-
-                            VALUES
-                            (
-                                SYARMIMI.APPOINTMENT_SEQ.NEXTVAL,
-
-                                :patient_name,
-                                :ic_number,
-                                :gender,
-                                :phone,
-                                :email,
-                                :department,
-
-                                TO_DATE(
-                                    :appointment_date,
-                                    'YYYY-MM-DD'
-                                ),
-
-                                :notes,
-
-                                'Rejected',
-
-                                NULL,
-                                NULL,
-
-                                :appointment_time,
-                                :address
-                            )
-
-                        ");
-
-
-                    $rejectStmt->execute([
-
-                        ':patient_name' =>
-                            $patient_name,
-
-                        ':ic_number' =>
-                            $ic_number,
-
-                        ':gender' =>
-                            $gender,
-
-                        ':phone' =>
-                            $phone,
-
-                        ':email' =>
-                            $email,
-
-                        ':department' =>
-                            $department,
-
-                        ':appointment_date' =>
-                            $appointment_date,
-
-                        ':notes' =>
-                            $notes,
-
-                        ':appointment_time' =>
-                            $appointment_time,
-
-                        ':address' =>
-                            $address
-
-                    ]);
-
-
-                    /* =============================================
-                       COMMIT REJECTION
-                    ============================================= */
-
-                    $conn->commit();
-
-
-                    /* =============================================
-                       REJECTION EMAIL
-                    ============================================= */
-
-                    $rejectionEmailSent =
-                        false;
-
-
-                    try {
-
-                        $rejectionEmailSent =
-                            sendAppointmentRejectedEmail(
-
-                                $email,
-
-                                $patient_name
-
-                            );
-
-                    }
-                    catch (
-                        Throwable $mailError
-                    ) {
-
-                        error_log(
-
-                            "Rejection email error: " .
-
-                            $mailError->getMessage()
-
-                        );
-
-
-                        $rejectionEmailSent =
-                            false;
-
+                        $conn->rollBack();
                     }
 
 
@@ -1197,61 +552,973 @@ if (isset($_POST['book'])) {
 
                     $message =
 
-                        "No doctor is available in the " .
-
-                        $department .
-
-                        " department on " .
-
-                        $displayDate .
-
-                        " at " .
-
-                        $appointment_time .
-
-                        ". Please select another date or time.";
+                        "You already have an appointment for "
+                        .
+                        $department
+                        .
+                        " on "
+                        .
+                        $displayDate
+                        .
+                        " at "
+                        .
+                        $appointment_time;
 
 
-                    if ($rejectionEmailSent) {
+                    if (
+                        !empty(
+                            $existingAppointment[
+                                'DOCTOR_NAME'
+                            ]
+                        )
+                    ) {
 
                         $message .=
 
-                            " An email notification has been sent to " .
-
-                            $email .
-
-                            ".";
+                            ". Assigned Doctor: "
+                            .
+                            $existingAppointment[
+                                'DOCTOR_NAME'
+                            ];
                     }
 
 
+                    $message .=
+                        ".";
+
+
                     $messageType =
-                        "danger";
+                        "warning";
                 }
+
+
+                /* =================================================
+                   CONTINUE BOOKING
+                ================================================= */
+
+                else {
+
+                    /* =================================================
+                       FIND AVAILABLE DOCTOR
+                    ================================================= */
+
+                    $doctorStmt =
+                        $conn->prepare("
+
+                            SELECT
+
+                                HS.ACCOUNT_ID,
+
+                                HS.USERNAME,
+
+                                DS.SLOT_ID,
+
+                                NVL(
+                                    DS.MAX_PATIENT,
+                                    1
+                                )
+                                AS MAX_PATIENT,
+
+                                NVL(
+                                    DS.CURRENT_PATIENT,
+                                    0
+                                )
+                                AS CURRENT_PATIENT
+
+                            FROM
+                                SYARMIMI.HOSPITAL_STAFF HS
+
+                            JOIN
+                                SYARMIMI.DOCTOR_AVAILABILITY DA
+
+                                ON
+                                TO_CHAR(
+                                    HS.ACCOUNT_ID
+                                )
+                                =
+                                TO_CHAR(
+                                    DA.ACCOUNT_ID
+                                )
+
+                            JOIN
+                                SYARMIMI.DOCTOR_SLOT DS
+
+                                ON
+                                TO_CHAR(
+                                    HS.ACCOUNT_ID
+                                )
+                                =
+                                TO_CHAR(
+                                    DS.ACCOUNT_ID
+                                )
+
+                            WHERE
+
+                                UPPER(
+                                    TRIM(HS.ROLE)
+                                )
+                                =
+                                'DOCTOR'
+
+                            AND
+
+                                UPPER(
+                                    TRIM(HS.DEPARTMENT)
+                                )
+                                =
+                                UPPER(
+                                    TRIM(:department)
+                                )
+
+                            AND
+
+                                TRUNC(
+                                    DA.AVAILABLE_DATE
+                                )
+                                =
+                                TO_DATE(
+                                    :available_date,
+                                    'YYYY-MM-DD'
+                                )
+
+                            AND
+
+                                UPPER(
+                                    TRIM(DA.STATUS)
+                                )
+                                =
+                                'AVAILABLE'
+
+                            AND
+
+                                TRUNC(
+                                    DS.SLOT_DATE
+                                )
+                                =
+                                TO_DATE(
+                                    :slot_date,
+                                    'YYYY-MM-DD'
+                                )
+
+                            AND
+
+                                TRIM(
+                                    DS.SLOT_TIME
+                                )
+                                =
+                                :slot_time
+
+                            AND
+
+                                UPPER(
+                                    TRIM(DS.STATUS)
+                                )
+                                =
+                                'AVAILABLE'
+
+                            AND
+
+                                NVL(
+                                    DS.CURRENT_PATIENT,
+                                    0
+                                )
+                                <
+                                NVL(
+                                    DS.MAX_PATIENT,
+                                    1
+                                )
+
+                            ORDER BY
+
+                                NVL(
+                                    DS.CURRENT_PATIENT,
+                                    0
+                                )
+                                ASC,
+
+                                HS.ACCOUNT_ID ASC
+
+                        ");
+
+
+                    $doctorStmt->execute([
+
+                        ':department' =>
+                            $department,
+
+                        ':available_date' =>
+                            $appointment_date,
+
+                        ':slot_date' =>
+                            $appointment_date,
+
+                        ':slot_time' =>
+                            $slotTime
+
+                    ]);
+
+
+                    $doctorCandidates =
+                        $doctorStmt->fetchAll(
+                            PDO::FETCH_ASSOC
+                        );
+
+
+                    $selectedDoctor =
+                        null;
+
+
+                    /* =================================================
+                       SELECT ONE DOCTOR ONLY
+                    ================================================= */
+
+                    foreach (
+                        $doctorCandidates
+                        as
+                        $candidate
+                    ) {
+
+                        $lockStmt =
+                            $conn->prepare("
+
+                                SELECT
+
+                                    SLOT_ID,
+
+                                    NVL(
+                                        MAX_PATIENT,
+                                        1
+                                    )
+                                    AS MAX_PATIENT,
+
+                                    NVL(
+                                        CURRENT_PATIENT,
+                                        0
+                                    )
+                                    AS CURRENT_PATIENT,
+
+                                    STATUS
+
+                                FROM
+                                    SYARMIMI.DOCTOR_SLOT
+
+                                WHERE
+                                    SLOT_ID =
+                                    :slot_id
+
+                                FOR UPDATE
+
+                            ");
+
+
+                        $lockStmt->execute([
+
+                            ':slot_id' =>
+                                $candidate[
+                                    'SLOT_ID'
+                                ]
+
+                        ]);
+
+
+                        $slot =
+                            $lockStmt->fetch(
+                                PDO::FETCH_ASSOC
+                            );
+
+
+                        if (!$slot) {
+
+                            continue;
+                        }
+
+
+                        $currentPatient =
+                            (int)(
+                                $slot[
+                                    'CURRENT_PATIENT'
+                                ]
+                                ??
+                                0
+                            );
+
+
+                        $maxPatient =
+                            (int)(
+                                $slot[
+                                    'MAX_PATIENT'
+                                ]
+                                ??
+                                1
+                            );
+
+
+                        $slotStatus =
+                            strtoupper(
+                                trim(
+                                    $slot[
+                                        'STATUS'
+                                    ]
+                                    ??
+                                    ''
+                                )
+                            );
+
+
+                        if (
+                            $slotStatus ===
+                            'AVAILABLE'
+                            &&
+                            $currentPatient
+                            <
+                            $maxPatient
+                        ) {
+
+                            $selectedDoctor =
+                                $candidate;
+
+
+                            $selectedDoctor[
+                                'CURRENT_PATIENT'
+                            ] =
+                                $currentPatient;
+
+
+                            $selectedDoctor[
+                                'MAX_PATIENT'
+                            ] =
+                                $maxPatient;
+
+
+                            break;
+                        }
+                    }
+
+
+                    /* =================================================
+                       DOCTOR FOUND
+                       AUTO APPROVE
+                    ================================================= */
+
+                    if (
+                        $selectedDoctor
+                    ) {
+
+                        $doctorAccountId =
+                            $selectedDoctor[
+                                'ACCOUNT_ID'
+                            ];
+
+
+                        $rawDoctorName =
+                            trim(
+                                $selectedDoctor[
+                                    'USERNAME'
+                                ]
+                            );
+
+
+                        /* =============================================
+                           PREVENT "Dr. Dr."
+                        ============================================= */
+
+                        if (
+                            stripos(
+                                $rawDoctorName,
+                                'Dr.'
+                            )
+                            ===
+                            0
+                        ) {
+
+                            $doctorName =
+                                $rawDoctorName;
+
+                        }
+                        else {
+
+                            $doctorName =
+                                'Dr. '
+                                .
+                                $rawDoctorName;
+                        }
+
+
+                        /* =============================================
+                           INSERT APPOINTMENT
+                        ============================================= */
+
+                        $insertStmt =
+                            $conn->prepare("
+
+                                INSERT INTO
+                                    SYARMIMI.APPOINTMENT
+                                (
+                                    APPOINTMENT_ID,
+                                    PATIENT_NAME,
+                                    IC_NUMBER,
+                                    GENDER,
+                                    PHONE,
+                                    EMAIL,
+                                    DEPARTMENT,
+                                    APPOINTMENT_DATE,
+                                    NOTES,
+                                    STATUS,
+                                    DOCTOR_NAME,
+                                    ACCOUNT_ID,
+                                    APPOINTMENT_TIME,
+                                    ADDRESS
+                                )
+
+                                VALUES
+                                (
+                                    SYARMIMI.APPOINTMENT_SEQ.NEXTVAL,
+
+                                    :patient_name,
+                                    :ic_number,
+                                    :gender,
+                                    :phone,
+                                    :email,
+                                    :department,
+
+                                    TO_DATE(
+                                        :appointment_date,
+                                        'YYYY-MM-DD'
+                                    ),
+
+                                    :notes,
+
+                                    'Approved',
+
+                                    :doctor_name,
+                                    :account_id,
+                                    :appointment_time,
+                                    :address
+                                )
+
+                            ");
+
+
+                        $insertStmt->execute([
+
+                            ':patient_name' =>
+                                $patient_name,
+
+                            ':ic_number' =>
+                                $ic_number,
+
+                            ':gender' =>
+                                $gender,
+
+                            ':phone' =>
+                                $phone,
+
+                            ':email' =>
+                                $email,
+
+                            ':department' =>
+                                $department,
+
+                            ':appointment_date' =>
+                                $appointment_date,
+
+                            ':notes' =>
+                                $notes,
+
+                            ':doctor_name' =>
+                                $doctorName,
+
+                            ':account_id' =>
+                                $doctorAccountId,
+
+                            ':appointment_time' =>
+                                $appointment_time,
+
+                            ':address' =>
+                                $address
+
+                        ]);
+
+
+                        /* =============================================
+                           GET NEW APPOINTMENT ID
+                        ============================================= */
+
+                        $newAppointmentId =
+                            $conn->query("
+
+                                SELECT
+                                    SYARMIMI.APPOINTMENT_SEQ.CURRVAL
+
+                                FROM
+                                    DUAL
+
+                            ")
+                            ->fetchColumn();
+
+
+                        /* =============================================
+                           UPDATE SELECTED SLOT
+                        ============================================= */
+
+                        $newCurrentPatient =
+                            (int)$selectedDoctor[
+                                'CURRENT_PATIENT'
+                            ]
+                            +
+                            1;
+
+
+                        $maxPatient =
+                            (int)$selectedDoctor[
+                                'MAX_PATIENT'
+                            ];
+
+
+                        $newSlotStatus =
+                            (
+                                $newCurrentPatient
+                                >=
+                                $maxPatient
+                            )
+                            ?
+                            'Booked'
+                            :
+                            'Available';
+
+
+                        $updateSlot =
+                            $conn->prepare("
+
+                                UPDATE
+                                    SYARMIMI.DOCTOR_SLOT
+
+                                SET
+
+                                    CURRENT_PATIENT =
+                                        :current_patient,
+
+                                    STATUS =
+                                        :status,
+
+                                    APPOINTMENT_ID =
+                                        :appointment
+
+                                WHERE
+                                    SLOT_ID =
+                                    :slot
+
+                            ");
+
+
+                        $updateSlot->execute([
+
+                            ':current_patient' =>
+                                $newCurrentPatient,
+
+                            ':status' =>
+                                $newSlotStatus,
+
+                            ':appointment' =>
+                                $newAppointmentId,
+
+                            ':slot' =>
+                                $selectedDoctor[
+                                    'SLOT_ID'
+                                ]
+
+                        ]);
+
+
+                        /* =============================================
+                           DOCTOR NOTIFICATION
+                        ============================================= */
+
+                        $notificationStmt =
+                            $conn->prepare("
+
+                                INSERT INTO
+                                    SYARMIMI.APPOINTMENT_NOTIFICATION
+                                (
+                                    NOTIFICATION_ID,
+                                    ACCOUNT_ID,
+                                    MESSAGE,
+                                    IS_READ,
+                                    CREATED_AT
+                                )
+
+                                VALUES
+                                (
+                                    SYARMIMI.NOTIF_SEQ.NEXTVAL,
+
+                                    :doctor,
+
+                                    :message,
+
+                                    0,
+
+                                    SYSDATE
+                                )
+
+                            ");
+
+
+                        $notificationMessage =
+
+                            'New appointment assigned: '
+                            .
+                            $patient_name
+                            .
+                            ' on '
+                            .
+                            date(
+                                'd M Y',
+                                strtotime(
+                                    $appointment_date
+                                )
+                            )
+                            .
+                            ' at '
+                            .
+                            $appointment_time;
+
+
+                        $notificationStmt->execute([
+
+                            ':doctor' =>
+                                $doctorAccountId,
+
+                            ':message' =>
+                                $notificationMessage
+
+                        ]);
+
+
+                        /* =============================================
+                           COMMIT DATABASE
+                        ============================================= */
+
+                        $conn->commit();
+
+
+                        /* =============================================
+                           SEND APPROVAL EMAIL
+                        ============================================= */
+
+                        $emailSent =
+                            false;
+
+
+                        try {
+
+                            $emailSent =
+                                sendAppointmentApprovalEmail(
+
+                                    $email,
+
+                                    $patient_name,
+
+                                    $doctorName,
+
+                                    $appointment_date,
+
+                                    $appointment_time
+
+                                );
+
+                        }
+                        catch (
+                            Throwable $mailError
+                        ) {
+
+                            error_log(
+
+                                "Approval email error: "
+                                .
+                                $mailError->getMessage()
+
+                            );
+
+
+                            $emailSent =
+                                false;
+                        }
+
+
+                        /* =============================================
+                           DISPLAY SUCCESS MESSAGE
+                        ============================================= */
+
+                        $displayDate =
+                            date(
+                                'd M Y',
+                                strtotime(
+                                    $appointment_date
+                                )
+                            );
+
+
+                        if (
+                            $emailSent
+                        ) {
+
+                            $message =
+
+                                "Your appointment has been automatically approved. "
+                                .
+                                "Assigned Doctor: "
+                                .
+                                $doctorName
+                                .
+                                ". Date: "
+                                .
+                                $displayDate
+                                .
+                                ". Time: "
+                                .
+                                $appointment_time
+                                .
+                                ". Confirmation email has been sent to "
+                                .
+                                $email
+                                .
+                                ".";
+
+                        }
+                        else {
+
+                            $message =
+
+                                "Your appointment has been approved. "
+                                .
+                                "Assigned Doctor: "
+                                .
+                                $doctorName
+                                .
+                                ". Date: "
+                                .
+                                $displayDate
+                                .
+                                ". Time: "
+                                .
+                                $appointment_time
+                                .
+                                ". However, the confirmation email could not be sent.";
+                        }
+
+
+                        $messageType =
+                            "success";
+                    }
+
+
+                    /* =================================================
+                       NO AVAILABLE DOCTOR
+                       AUTO REJECT
+                    ================================================= */
+
+                    else {
+
+                        $rejectStmt =
+                            $conn->prepare("
+
+                                INSERT INTO
+                                    SYARMIMI.APPOINTMENT
+                                (
+                                    APPOINTMENT_ID,
+                                    PATIENT_NAME,
+                                    IC_NUMBER,
+                                    GENDER,
+                                    PHONE,
+                                    EMAIL,
+                                    DEPARTMENT,
+                                    APPOINTMENT_DATE,
+                                    NOTES,
+                                    STATUS,
+                                    DOCTOR_NAME,
+                                    ACCOUNT_ID,
+                                    APPOINTMENT_TIME,
+                                    ADDRESS
+                                )
+
+                                VALUES
+                                (
+                                    SYARMIMI.APPOINTMENT_SEQ.NEXTVAL,
+
+                                    :patient_name,
+                                    :ic_number,
+                                    :gender,
+                                    :phone,
+                                    :email,
+                                    :department,
+
+                                    TO_DATE(
+                                        :appointment_date,
+                                        'YYYY-MM-DD'
+                                    ),
+
+                                    :notes,
+
+                                    'Rejected',
+
+                                    NULL,
+                                    NULL,
+
+                                    :appointment_time,
+                                    :address
+                                )
+
+                            ");
+
+
+                        $rejectStmt->execute([
+
+                            ':patient_name' =>
+                                $patient_name,
+
+                            ':ic_number' =>
+                                $ic_number,
+
+                            ':gender' =>
+                                $gender,
+
+                            ':phone' =>
+                                $phone,
+
+                            ':email' =>
+                                $email,
+
+                            ':department' =>
+                                $department,
+
+                            ':appointment_date' =>
+                                $appointment_date,
+
+                            ':notes' =>
+                                $notes,
+
+                            ':appointment_time' =>
+                                $appointment_time,
+
+                            ':address' =>
+                                $address
+
+                        ]);
+
+
+                        /* =============================================
+                           COMMIT REJECTION
+                        ============================================= */
+
+                        $conn->commit();
+
+
+                        /* =============================================
+                           REJECTION EMAIL
+                        ============================================= */
+
+                        $rejectionEmailSent =
+                            false;
+
+
+                        try {
+
+                            $rejectionEmailSent =
+                                sendAppointmentRejectedEmail(
+
+                                    $email,
+
+                                    $patient_name
+
+                                );
+
+                        }
+                        catch (
+                            Throwable $mailError
+                        ) {
+
+                            error_log(
+
+                                "Rejection email error: "
+                                .
+                                $mailError->getMessage()
+
+                            );
+
+
+                            $rejectionEmailSent =
+                                false;
+                        }
+
+
+                        $displayDate =
+                            date(
+                                'd M Y',
+                                strtotime(
+                                    $appointment_date
+                                )
+                            );
+
+
+                        $message =
+
+                            "No doctor is available in the "
+                            .
+                            $department
+                            .
+                            " department on "
+                            .
+                            $displayDate
+                            .
+                            " at "
+                            .
+                            $appointment_time
+                            .
+                            ". Please select another date or time.";
+
+
+                        if (
+                            $rejectionEmailSent
+                        ) {
+
+                            $message .=
+
+                                " An email notification has been sent to "
+                                .
+                                $email
+                                .
+                                ".";
+                        }
+
+
+                        $messageType =
+                            "danger";
+                    }
+                }
+
             }
-
-        }
-        catch (
-            Throwable $e
-        ) {
-
-            if (
-                $conn->inTransaction()
+            catch (
+                Throwable $e
             ) {
 
-                $conn->rollBack();
+                if (
+                    $conn->inTransaction()
+                ) {
 
+                    $conn->rollBack();
+                }
+
+
+                $message =
+
+                    "Unable to process appointment: "
+                    .
+                    $e->getMessage();
+
+
+                $messageType =
+                    "danger";
             }
-
-
-            $message =
-
-                "Unable to process appointment: " .
-
-                $e->getMessage();
-
-
-            $messageType =
-                "danger";
         }
     }
 }
@@ -1271,7 +1538,9 @@ $departmentStmt =
             SYARMIMI.HOSPITAL_STAFF
 
         WHERE
-            UPPER(TRIM(ROLE))
+            UPPER(
+                TRIM(ROLE)
+            )
             =
             'DOCTOR'
 
@@ -1292,6 +1561,7 @@ $departments =
 
 ?>
 
+
 <!DOCTYPE html>
 
 <html lang="en">
@@ -1306,7 +1576,7 @@ $departments =
 >
 
 <title>
-    Make Appointment | ZB-CARE
+Make Appointment | ZB-CARE
 </title>
 
 
@@ -1328,7 +1598,9 @@ body {
 
     background:#f3f6fb;
 
-    font-family:'Segoe UI', sans-serif;
+    font-family:
+        'Segoe UI',
+        sans-serif;
 
 }
 
@@ -1491,6 +1763,46 @@ label {
 
 
 /* =========================================================
+   DATE INFORMATION
+========================================================= */
+
+.date-booking-info {
+
+    display:flex;
+
+    align-items:flex-start;
+
+    gap:9px;
+
+    margin-top:8px;
+
+    padding:9px 11px;
+
+    background:#f8fafc;
+
+    border:1px solid #e2e8f0;
+
+    border-radius:9px;
+
+    color:#64748b;
+
+    font-size:12px;
+
+    line-height:1.5;
+
+}
+
+
+.date-booking-info i {
+
+    margin-top:1px;
+
+    color:#2563eb;
+
+}
+
+
+/* =========================================================
    AUTO DOCTOR
 ========================================================= */
 
@@ -1518,6 +1830,8 @@ label {
     width:34px;
 
     height:34px;
+
+    min-width:34px;
 
     border-radius:50%;
 
@@ -1612,6 +1926,60 @@ footer {
 
 }
 
+
+/* =========================================================
+   RESPONSIVE
+========================================================= */
+
+@media(max-width:768px) {
+
+    .hero {
+
+        padding:75px 18px;
+
+    }
+
+
+    .hero h1 {
+
+        font-size:38px;
+
+    }
+
+
+    .hero p {
+
+        font-size:16px;
+
+    }
+
+
+    .form-box {
+
+        padding:25px 20px;
+
+        border-radius:20px;
+
+    }
+
+
+    .navbar-brand {
+
+        font-size:24px;
+
+    }
+
+
+    .home-btn {
+
+        padding:8px 15px;
+
+        font-size:13px;
+
+    }
+
+}
+
 </style>
 
 </head>
@@ -1665,11 +2033,11 @@ footer {
 <div class="hero">
 
 <h1>
-    Make An Appointment
+Make An Appointment
 </h1>
 
 <p>
-    Book your specialist consultation online easily.
+Book your specialist consultation online easily.
 </p>
 
 </div>
@@ -1688,21 +2056,29 @@ footer {
 <div class="form-box">
 
 
-<!-- MESSAGE -->
+<!-- =====================================================
+     MESSAGE
+===================================================== -->
 
-<?php if ($message !== ''): ?>
+<?php if (
+    $message !== ''
+): ?>
 
 <div
     class="
         alert
         alert-<?= htmlspecialchars(
-            $messageType ?: 'info'
+            $messageType
+            ?:
+            'info'
         ) ?>
         mb-4
     "
 >
 
-<?= htmlspecialchars($message) ?>
+<?= htmlspecialchars(
+    $message
+) ?>
 
 </div>
 
@@ -1718,12 +2094,14 @@ footer {
 <div class="row">
 
 
-<!-- NAME -->
+<!-- =====================================================
+     NAME
+===================================================== -->
 
 <div class="col-md-6 mb-4">
 
 <label>
-    Patient Name *
+Patient Name *
 </label>
 
 <input
@@ -1738,12 +2116,14 @@ footer {
 </div>
 
 
-<!-- PHONE -->
+<!-- =====================================================
+     PHONE
+===================================================== -->
 
 <div class="col-md-6 mb-4">
 
 <label>
-    Contact Number *
+Contact Number *
 </label>
 
 <input
@@ -1758,12 +2138,14 @@ footer {
 </div>
 
 
-<!-- EMAIL -->
+<!-- =====================================================
+     EMAIL
+===================================================== -->
 
 <div class="col-md-6 mb-4">
 
 <label>
-    Email Address *
+Email Address *
 </label>
 
 <input
@@ -1776,12 +2158,14 @@ footer {
 </div>
 
 
-<!-- IC -->
+<!-- =====================================================
+     IC
+===================================================== -->
 
 <div class="col-md-6 mb-4">
 
 <label>
-    IC Number *
+IC Number *
 </label>
 
 <input
@@ -1796,12 +2180,14 @@ footer {
 </div>
 
 
-<!-- GENDER -->
+<!-- =====================================================
+     GENDER
+===================================================== -->
 
 <div class="col-md-6 mb-4">
 
 <label>
-    Gender *
+Gender *
 </label>
 
 <select
@@ -1811,15 +2197,15 @@ footer {
 >
 
 <option value="">
-    Select Gender
+Select Gender
 </option>
 
 <option value="Male">
-    Male
+Male
 </option>
 
 <option value="Female">
-    Female
+Female
 </option>
 
 </select>
@@ -1827,12 +2213,14 @@ footer {
 </div>
 
 
-<!-- DEPARTMENT -->
+<!-- =====================================================
+     DEPARTMENT
+===================================================== -->
 
 <div class="col-md-6 mb-4">
 
 <label>
-    Specialist Department *
+Specialist Department *
 </label>
 
 <select
@@ -1842,11 +2230,15 @@ footer {
 >
 
 <option value="">
-    Select Department
+Select Department
 </option>
 
 
-<?php foreach ($departments as $dep): ?>
+<?php foreach (
+    $departments
+    as
+    $dep
+): ?>
 
 <option
     value="<?= htmlspecialchars(
@@ -1868,12 +2260,14 @@ footer {
 </div>
 
 
-<!-- AUTO DOCTOR -->
+<!-- =====================================================
+     AUTO DOCTOR
+===================================================== -->
 
 <div class="col-md-6 mb-4">
 
 <label>
-    Doctor Assignment
+Doctor Assignment
 </label>
 
 
@@ -1909,31 +2303,83 @@ One available doctor will be assigned automatically.
 </div>
 
 
-<!-- DATE -->
+<!-- =====================================================
+     APPOINTMENT DATE
+
+     IMPORTANT:
+     min = today
+     max = today + 3 months
+===================================================== -->
 
 <div class="col-md-6 mb-4">
 
 <label>
-    Appointment Date *
+Appointment Date *
 </label>
+
 
 <input
     type="date"
     id="appointment_date"
     name="appointment_date"
     class="form-control"
+    min="<?= htmlspecialchars(
+        $minimumAppointmentDate
+    ) ?>"
+    max="<?= htmlspecialchars(
+        $maximumAppointmentDate
+    ) ?>"
     required
 >
+
+
+<div class="date-booking-info">
+
+<i class="bi bi-info-circle"></i>
+
+<div>
+
+Appointments can be booked up to
+<strong>3 months in advance</strong>.
+
+<br>
+
+Available booking period:
+
+<strong>
+<?= htmlspecialchars(
+    $todayDateObject->format(
+        'd M Y'
+    )
+) ?>
+</strong>
+
+–
+
+<strong>
+<?= htmlspecialchars(
+    $maxAppointmentDateObject->format(
+        'd M Y'
+    )
+) ?>
+</strong>
+
+</div>
 
 </div>
 
 
-<!-- TIME -->
+</div>
+
+
+<!-- =====================================================
+     TIME
+===================================================== -->
 
 <div class="col-md-6 mb-4">
 
 <label>
-    Appointment Time *
+Appointment Time *
 </label>
 
 <select
@@ -1943,39 +2389,39 @@ One available doctor will be assigned automatically.
 >
 
 <option value="">
-    Select Appointment Time
+Select Appointment Time
 </option>
 
 <option value="08:00 AM">
-    08:00 AM
+08:00 AM
 </option>
 
 <option value="09:00 AM">
-    09:00 AM
+09:00 AM
 </option>
 
 <option value="10:00 AM">
-    10:00 AM
+10:00 AM
 </option>
 
 <option value="11:00 AM">
-    11:00 AM
+11:00 AM
 </option>
 
 <option value="12:00 PM">
-    12:00 PM
+12:00 PM
 </option>
 
 <option value="02:00 PM">
-    02:00 PM
+02:00 PM
 </option>
 
 <option value="03:00 PM">
-    03:00 PM
+03:00 PM
 </option>
 
 <option value="04:00 PM">
-    04:00 PM
+04:00 PM
 </option>
 
 </select>
@@ -1983,12 +2429,14 @@ One available doctor will be assigned automatically.
 </div>
 
 
-<!-- ADDRESS -->
+<!-- =====================================================
+     ADDRESS
+===================================================== -->
 
 <div class="col-md-12 mb-4">
 
 <label>
-    Address *
+Address *
 </label>
 
 <textarea
@@ -2003,12 +2451,14 @@ One available doctor will be assigned automatically.
 </div>
 
 
-<!-- NOTES -->
+<!-- =====================================================
+     NOTES
+===================================================== -->
 
 <div class="col-md-12 mb-4">
 
 <label>
-    Remarks / Symptoms
+Remarks / Symptoms
 </label>
 
 <textarea
@@ -2023,7 +2473,9 @@ One available doctor will be assigned automatically.
 </div>
 
 
-<!-- INFO -->
+<!-- =====================================================
+     INFO
+===================================================== -->
 
 <div class="col-md-12 mb-4">
 
@@ -2054,7 +2506,9 @@ and a confirmation email will be sent automatically.
 </div>
 
 
-<!-- BUTTON -->
+<!-- =====================================================
+     BUTTON
+===================================================== -->
 
 <div class="col-md-12">
 
@@ -2104,7 +2558,9 @@ Check Availability & Book Appointment
 <div class="container text-center">
 
 <h4>
-    🏥 ZB-CARE Specialist Hospital
+
+🏥 ZB-CARE Specialist Hospital
+
 </h4>
 
 <p class="mt-3 text-light">
@@ -2128,17 +2584,30 @@ Orthopaedics • Paediatrics • Dietitian & Nutrition
 
 
 /* =========================================================
-   MINIMUM DATE
+   APPOINTMENT DATE RANGE
+
+   PHP already sets min/max in HTML.
+
+   This JavaScript adds another client-side check
+   before form submission.
 ========================================================= */
 
-document
-.getElementById(
-    'appointment_date'
-)
-.min =
-new Date()
-.toISOString()
-.split('T')[0];
+const appointmentDateInput =
+    document.getElementById(
+        'appointment_date'
+    );
+
+
+const minimumAppointmentDate =
+    '<?= htmlspecialchars(
+        $minimumAppointmentDate
+    ) ?>';
+
+
+const maximumAppointmentDate =
+    '<?= htmlspecialchars(
+        $maximumAppointmentDate
+    ) ?>';
 
 
 /* =========================================================
@@ -2162,26 +2631,44 @@ document
             );
 
 
-        if (value.length > 6) {
+        if (
+            value.length
+            >
+            6
+        ) {
 
             value =
-                value.substring(0,6)
+                value.substring(
+                    0,
+                    6
+                )
                 +
                 '-'
                 +
-                value.substring(6);
+                value.substring(
+                    6
+                );
 
         }
 
 
-        if (value.length > 9) {
+        if (
+            value.length
+            >
+            9
+        ) {
 
             value =
-                value.substring(0,9)
+                value.substring(
+                    0,
+                    9
+                )
                 +
                 '-'
                 +
-                value.substring(9);
+                value.substring(
+                    9
+                );
 
         }
 
@@ -2214,26 +2701,44 @@ document
             );
 
 
-        if (value.length > 3) {
+        if (
+            value.length
+            >
+            3
+        ) {
 
             value =
-                value.substring(0,3)
+                value.substring(
+                    0,
+                    3
+                )
                 +
                 '-'
                 +
-                value.substring(3);
+                value.substring(
+                    3
+                );
 
         }
 
 
-        if (value.length > 7) {
+        if (
+            value.length
+            >
+            7
+        ) {
 
             value =
-                value.substring(0,7)
+                value.substring(
+                    0,
+                    7
+                )
                 +
                 '-'
                 +
-                value.substring(7);
+                value.substring(
+                    7
+                );
 
         }
 
@@ -2247,6 +2752,7 @@ document
 
 /* =========================================================
    PREVENT DOUBLE SUBMIT
+   + CHECK 3 MONTH LIMIT
 ========================================================= */
 
 let appointmentSubmitting =
@@ -2262,12 +2768,68 @@ document
     function(event)
     {
 
-        if (appointmentSubmitting) {
+        /* =================================================
+           DATE MUST BE WITHIN ALLOWED RANGE
+        ================================================= */
+
+        const selectedDate =
+            appointmentDateInput.value;
+
+
+        if (
+            selectedDate
+            <
+            minimumAppointmentDate
+        ) {
 
             event.preventDefault();
 
-            return;
 
+            alert(
+                'Appointment date cannot be earlier than today.'
+            );
+
+
+            appointmentDateInput.focus();
+
+
+            return;
+        }
+
+
+        if (
+            selectedDate
+            >
+            maximumAppointmentDate
+        ) {
+
+            event.preventDefault();
+
+
+            alert(
+                'Appointments can only be booked up to 3 months in advance.'
+            );
+
+
+            appointmentDateInput.focus();
+
+
+            return;
+        }
+
+
+        /* =================================================
+           PREVENT DOUBLE CLICK
+        ================================================= */
+
+        if (
+            appointmentSubmitting
+        ) {
+
+            event.preventDefault();
+
+
+            return;
         }
 
 
@@ -2307,7 +2869,6 @@ document
 
     }
 );
-
 
 </script>
 

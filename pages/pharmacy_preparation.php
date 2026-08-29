@@ -1,85 +1,164 @@
 <?php
 
 session_start();
-
 include("../config/config.php");
 
-/* ==========================================================================
-   CHECK LOGIN
-========================================================================== */
+date_default_timezone_set('Asia/Kuala_Lumpur');
 
-if (!isset($_SESSION['role']) || $_SESSION['role'] !== 'pharmacist') {
+
+/* =========================================================
+   ROLE CHECK
+========================================================= */
+
+if (
+    !isset($_SESSION['role']) ||
+    $_SESSION['role'] !== 'pharmacist'
+) {
     header("Location: ../auth/login.php");
     exit();
 }
 
+$staffId =
+    (int)(
+        $_SESSION['user_id']
+        ?? 0
+    );
 
-/* ==========================================================================
-   GET FILTER VALUES
-========================================================================== */
-
-$currentType   = $_GET['type'] ?? '';
-$currentSearch = $_GET['search'] ?? '';
-$currentSort   = $_GET['sort'] ?? 'desc';
+if ($staffId <= 0) {
+    die("Invalid pharmacist account.");
+}
 
 
-/* ==========================================================================
-   VALIDATE TYPE
-========================================================================== */
+/* =========================================================
+   SAFE HTML
+========================================================= */
+
+function h($value)
+{
+    return htmlspecialchars(
+        (string)($value ?? ''),
+        ENT_QUOTES,
+        'UTF-8'
+    );
+}
+
+
+/* =========================================================
+   FILTER VALUES
+========================================================= */
+
+$currentType =
+    $_GET['type']
+    ?? '';
+
+$currentSearch =
+    $_GET['search']
+    ?? '';
+
+$currentSort =
+    $_GET['sort']
+    ?? 'asc';
+
+$currentRecordDate =
+    trim(
+        $_GET['record_date']
+        ?? ''
+    );
+
+
+if (
+    $currentRecordDate !== ''
+    &&
+    !preg_match(
+        '/^\d{4}-\d{2}-\d{2}$/',
+        $currentRecordDate
+    )
+) {
+    $currentRecordDate = '';
+}
+
 
 $allowedTypes = [
     '',
     'Appointment',
     'Walk-In',
-    'Admission'
+    'Admission',
+    'Discharge'
 ];
 
-if (!in_array($currentType, $allowedTypes, true)) {
+
+if (
+    !in_array(
+        $currentType,
+        $allowedTypes,
+        true
+    )
+) {
     $currentType = '';
 }
 
 
-/* ==========================================================================
-   VALIDATE SORT
-========================================================================== */
-
-if ($currentSort !== 'asc' && $currentSort !== 'desc') {
-    $currentSort = 'desc';
+if (
+    $currentSort !== 'asc'
+    &&
+    $currentSort !== 'desc'
+) {
+    $currentSort = 'asc';
 }
 
 
-/* ==========================================================================
-   HELPER - REDIRECT WITH FILTERS
-========================================================================== */
+/* =========================================================
+   REDIRECT HELPER
+========================================================= */
 
-function redirectWithFilters($page, $extra = [])
-{
-    global $currentType, $currentSearch, $currentSort;
+function redirectWithFilters(
+    $extra = []
+) {
+
+    global
+        $currentType,
+        $currentSearch,
+        $currentSort,
+        $currentRecordDate;
 
     $params = [];
 
-    // Preserve type filter
+
     if ($currentType !== '') {
-        $params['type'] = $currentType;
+        $params['type'] =
+            $currentType;
     }
 
-    // Preserve search filter
+
     if ($currentSearch !== '') {
-        $params['search'] = $currentSearch;
+        $params['search'] =
+            $currentSearch;
     }
 
-    // Preserve sort
-    $params['sort'] = $currentSort;
 
-    // Add extra parameters (like success, collected, etc.)
-    foreach ($extra as $key => $value) {
-        $params[$key] = $value;
+    $params['sort'] =
+        $currentSort;
+
+
+    if ($currentRecordDate !== '') {
+        $params['record_date'] =
+            $currentRecordDate;
     }
+
+
+    foreach (
+        $extra
+        as
+        $key => $value
+    ) {
+        $params[$key] =
+            $value;
+    }
+
 
     header(
-        "Location: " .
-        $page .
-        "?" .
+        "Location: pharmacy_preparation.php?"
+        .
         http_build_query($params)
     );
 
@@ -87,687 +166,2030 @@ function redirectWithFilters($page, $extra = [])
 }
 
 
-/* ==========================================================================
-   HANDLE PREPARE ACTION
-========================================================================== */
+/* =========================================================
+   PREPARE ADMISSION SCHEDULED DOSE
 
-if (isset($_GET['prepare'])) {
+   INPATIENT FLOW:
 
-    $medOrderId = (int) $_GET['prepare'];
-    $staffId    = $_SESSION['user_id'] ?? null;
+   Pending Preparation
+        ↓
+   Pharmacist Prepare
+        ↓
+   Ready For Nurse Pickup
+        ↓
+   Nurse collection
+        ↓
+   Collected / Collected By Nurse
+        ↓
+   Nurse administration
+        ↓
+   Administered
+========================================================= */
+
+if (
+    isset(
+        $_GET['prepare_schedule']
+    )
+) {
+
+    $scheduleId =
+        (int)(
+            $_GET['prepare_schedule']
+            ?? 0
+        );
+
+
+    if ($scheduleId <= 0) {
+
+        redirectWithFilters([
+            'error' => 'invalid'
+        ]);
+    }
+
 
     try {
 
-        /* ==============================================================
-           GET MEDICATION ORDER
-        ============================================================== */
+        $conn->beginTransaction();
 
-        $orderStmt = $conn->prepare("
-            SELECT
-                mo.MEDORDER_ID,
-                mo.ADMISSION_ID,
-                mo.APPOINTMENT_ID,
-                mo.CONSULTATION_ID,
-                mo.MED_START_DATE,
-                mo.MED_END_DATE,
-                mo.PATIENT_ID,
-                a.ADMISSION_DATE,
-                a.EXPECTED_DISCHARGE_DATE,
-                a.DISCHARGE_DATE
 
-            FROM SYARMIMI.MEDICATION_ORDER mo
+        /* =================================================
+           GET / LOCK SCHEDULE
+        ================================================= */
 
-            LEFT JOIN SYARMIMI.ADMISSION a
-                ON mo.ADMISSION_ID = a.ADMISSION_ID
+        $scheduleStmt =
+            $conn->prepare("
 
-            WHERE mo.MEDORDER_ID = ?
-        ");
+                SELECT
+
+                    MS.SCHEDULE_ID,
+                    MS.MEDORDER_ID,
+                    MS.SCHEDULE_DATE,
+                    MS.SCHEDULE_TIME,
+                    MS.STATUS,
+
+                    MO.ADMISSION_ID,
+                    MO.ORDER_TYPE,
+                    MO.MED_START_DATE,
+                    MO.MED_END_DATE,
+
+                    A.EXPECTED_DISCHARGE_DATE,
+                    A.DISCHARGE_DATE
+
+                FROM
+                    SYARMIMI.MEDICATION_SCHEDULE MS
+
+                JOIN
+                    SYARMIMI.MEDICATION_ORDER MO
+
+                    ON
+                        MS.MEDORDER_ID =
+                        MO.MEDORDER_ID
+
+                JOIN
+                    SYARMIMI.ADMISSION A
+
+                    ON
+                        MO.ADMISSION_ID =
+                        A.ADMISSION_ID
+
+                WHERE
+                    MS.SCHEDULE_ID = ?
+
+                FOR UPDATE
+
+            ");
+
+
+        $scheduleStmt->execute([
+            $scheduleId
+        ]);
+
+
+        $schedule =
+            $scheduleStmt->fetch(
+                PDO::FETCH_ASSOC
+            );
+
+
+        if (!$schedule) {
+
+            throw new Exception(
+                "Medication schedule not found."
+            );
+        }
+
+
+        /* =================================================
+           MUST BE INPATIENT / ADMISSION
+        ================================================= */
+
+        if (
+            empty(
+                $schedule[
+                    'ADMISSION_ID'
+                ]
+            )
+        ) {
+
+            throw new Exception(
+                "Invalid admission medication schedule."
+            );
+        }
+
+
+        $orderType =
+            strtoupper(
+                trim(
+                    (string)(
+                        $schedule[
+                            'ORDER_TYPE'
+                        ]
+                        ?? ''
+                    )
+                )
+            );
+
+
+        /*
+           Historical admission data may have NULL ORDER_TYPE.
+
+           ADMISSION_ID remains the authoritative fallback.
+        */
+
+        if (
+            $orderType !== ''
+            &&
+            $orderType !== 'INPATIENT'
+        ) {
+
+            throw new Exception(
+                "This medication order is not an inpatient medication order."
+            );
+        }
+
+
+        /* =================================================
+           DISCHARGED PATIENT = HISTORY ONLY
+        ================================================= */
+
+        if (
+            !empty(
+                $schedule[
+                    'DISCHARGE_DATE'
+                ]
+            )
+        ) {
+
+            throw new Exception(
+                "This patient has already been discharged. This record is for history only."
+            );
+        }
+
+
+        /* =================================================
+           CANCELLED DOSE CANNOT BE PREPARED
+        ================================================= */
+
+        $scheduleStatus =
+            strtoupper(
+                trim(
+                    (string)(
+                        $schedule[
+                            'STATUS'
+                        ]
+                        ?? ''
+                    )
+                )
+            );
+
+
+        if (
+            in_array(
+                $scheduleStatus,
+                [
+                    'CANCELLED',
+                    'CANCELLED - DISCHARGED'
+                ],
+                true
+            )
+        ) {
+
+            throw new Exception(
+                "This medication dose has been cancelled and cannot be prepared."
+            );
+        }
+
+
+        if (
+            in_array(
+                $scheduleStatus,
+                [
+                    'ADMINISTERED',
+                    'GIVEN',
+                    'DELIVERED',
+                    'COMPLETED'
+                ],
+                true
+            )
+        ) {
+
+            throw new Exception(
+                "This medication dose has already been completed."
+            );
+        }
+
+
+        /* =================================================
+           ONLY TODAY CAN BE PREPARED
+        ================================================= */
+
+        $todayCheck =
+            $conn->prepare("
+
+                SELECT
+                    COUNT(*)
+
+                FROM
+                    SYARMIMI.MEDICATION_SCHEDULE
+
+                WHERE
+                    SCHEDULE_ID = ?
+
+                AND
+                    TRUNC(
+                        SCHEDULE_DATE
+                    )
+                    =
+                    TRUNC(
+                        SYSDATE
+                    )
+
+            ");
+
+
+        $todayCheck->execute([
+            $scheduleId
+        ]);
+
+
+        if (
+            (int)$todayCheck
+                ->fetchColumn()
+            === 0
+        ) {
+
+            throw new Exception(
+                "Only medication scheduled for today can be prepared."
+            );
+        }
+
+
+        /* =================================================
+           ACTIVE MEDICATION PERIOD
+        ================================================= */
+
+        $periodCheck =
+            $conn->prepare("
+
+                SELECT
+                    COUNT(*)
+
+                FROM
+                    SYARMIMI.MEDICATION_SCHEDULE MS
+
+                JOIN
+                    SYARMIMI.MEDICATION_ORDER MO
+
+                    ON
+                        MS.MEDORDER_ID =
+                        MO.MEDORDER_ID
+
+                JOIN
+                    SYARMIMI.ADMISSION A
+
+                    ON
+                        MO.ADMISSION_ID =
+                        A.ADMISSION_ID
+
+                WHERE
+                    MS.SCHEDULE_ID = ?
+
+                AND
+                    A.DISCHARGE_DATE
+                    IS NULL
+
+                AND
+                (
+                    MO.MED_START_DATE
+                    IS NULL
+
+                    OR
+
+                    TRUNC(
+                        MS.SCHEDULE_DATE
+                    )
+                    >=
+                    TRUNC(
+                        MO.MED_START_DATE
+                    )
+                )
+
+                AND
+                (
+                    MO.MED_END_DATE
+                    IS NULL
+
+                    OR
+
+                    TRUNC(
+                        MS.SCHEDULE_DATE
+                    )
+                    <=
+                    TRUNC(
+                        MO.MED_END_DATE
+                    )
+                )
+
+                AND
+                (
+                    A.EXPECTED_DISCHARGE_DATE
+                    IS NULL
+
+                    OR
+
+                    TRUNC(
+                        MS.SCHEDULE_DATE
+                    )
+                    <=
+                    TRUNC(
+                        A.EXPECTED_DISCHARGE_DATE
+                    )
+                )
+
+            ");
+
+
+        $periodCheck->execute([
+            $scheduleId
+        ]);
+
+
+        if (
+            (int)$periodCheck
+                ->fetchColumn()
+            === 0
+        ) {
+
+            throw new Exception(
+                "This medication dose is no longer active."
+            );
+        }
+
+
+        /* =================================================
+           ALREADY PREPARED
+        ================================================= */
+
+        $checkPrep =
+            $conn->prepare("
+
+                SELECT
+                    COUNT(*)
+
+                FROM
+                    SYARMIMI.PHARMACY_PREPARATION
+
+                WHERE
+                    SCHEDULE_ID = ?
+
+            ");
+
+
+        $checkPrep->execute([
+            $scheduleId
+        ]);
+
+
+        if (
+            (int)$checkPrep
+                ->fetchColumn()
+            > 0
+        ) {
+
+            $conn->rollBack();
+
+
+            redirectWithFilters([
+                'success' =>
+                    'already'
+            ]);
+        }
+
+
+        /* =================================================
+           INSERT PREPARATION
+        ================================================= */
+
+        $insertPrep =
+            $conn->prepare("
+
+                INSERT INTO
+                    SYARMIMI.PHARMACY_PREPARATION
+                (
+                    PREP_ID,
+                    STATUS,
+                    PREPARED_TIME,
+                    MEDORDER_ID,
+                    ACCOUNT_ID,
+                    SCHEDULE_ID
+                )
+
+                VALUES
+                (
+                    SYARMIMI.PREPARATION_SEQ.NEXTVAL,
+
+                    'Ready For Nurse Pickup',
+
+                    SYSDATE,
+
+                    ?,
+
+                    ?,
+
+                    ?
+                )
+
+            ");
+
+
+        $insertPrep->execute([
+
+            $schedule[
+                'MEDORDER_ID'
+            ],
+
+            $staffId,
+
+            $scheduleId
+
+        ]);
+
+
+        /* =================================================
+           UPDATE SCHEDULE STATUS
+        ================================================= */
+
+        $updateSchedule =
+            $conn->prepare("
+
+                UPDATE
+                    SYARMIMI.MEDICATION_SCHEDULE
+
+                SET
+                    STATUS =
+                    'Ready For Nurse Pickup'
+
+                WHERE
+                    SCHEDULE_ID = ?
+
+            ");
+
+
+        $updateSchedule->execute([
+            $scheduleId
+        ]);
+
+
+        $conn->commit();
+
+
+        redirectWithFilters([
+            'success' => '1'
+        ]);
+
+    }
+    catch (Throwable $e) {
+
+        if (
+            $conn->inTransaction()
+        ) {
+
+            $conn->rollBack();
+        }
+
+
+        redirectWithFilters([
+
+            'error' =>
+                'prepare_failed',
+
+            'message' =>
+                $e->getMessage()
+
+        ]);
+    }
+}
+
+
+/* =========================================================
+   PREPARE PATIENT-PICKUP MEDICATION
+
+   SUPPORTED:
+
+   APPOINTMENT
+   WALKIN
+   DISCHARGE
+
+   All use:
+
+   Ready For Pickup
+        ↓
+   Patient Collect
+        ↓
+   Collected
+
+   DISCHARGE medication does NOT have:
+   - ADMISSION_ID
+   - APPOINTMENT_ID
+   - CONSULTATION_ID
+   - MEDICATION_SCHEDULE
+========================================================= */
+
+if (
+    isset(
+        $_GET['prepare_order']
+    )
+) {
+
+    $medOrderId =
+        (int)(
+            $_GET['prepare_order']
+            ?? 0
+        );
+
+
+    if ($medOrderId <= 0) {
+
+        redirectWithFilters([
+            'error' => 'invalid'
+        ]);
+    }
+
+
+    try {
+
+        $conn->beginTransaction();
+
+
+        $orderStmt =
+            $conn->prepare("
+
+                SELECT
+
+                    MEDORDER_ID,
+                    PATIENT_ID,
+                    ADMISSION_ID,
+                    APPOINTMENT_ID,
+                    CONSULTATION_ID,
+                    ORDER_TYPE
+
+                FROM
+                    SYARMIMI.MEDICATION_ORDER
+
+                WHERE
+                    MEDORDER_ID = ?
+
+                FOR UPDATE
+
+            ");
+
 
         $orderStmt->execute([
             $medOrderId
         ]);
 
-        $orderInfo = $orderStmt->fetch(PDO::FETCH_ASSOC);
+
+        $order =
+            $orderStmt->fetch(
+                PDO::FETCH_ASSOC
+            );
 
 
-        if (!$orderInfo) {
-            die("Medication order not found.");
+        if (!$order) {
+
+            throw new Exception(
+                "Medication order not found."
+            );
         }
 
 
-        /* ==============================================================
-           CHECK IF THIS IS ADMISSION MEDICATION
-        ============================================================== */
+        /* =================================================
+           ADMISSION MUST USE SCHEDULE
+        ================================================= */
 
-        $isAdmission = !empty($orderInfo['ADMISSION_ID']);
+        if (
+            !empty(
+                $order[
+                    'ADMISSION_ID'
+                ]
+            )
+        ) {
 
-
-        /* ==============================================================
-           ADMISSION MEDICATION
-           
-           IMPORTANT:
-           A patient can have ONE preparation PER DAY.
-           
-           Previous day's preparation must NOT block today's preparation.
-        ============================================================== */
-
-        if ($isAdmission) {
-
-            /* ----------------------------------------------------------
-               Check admission is still active
-            ---------------------------------------------------------- */
-
-            if (!empty($orderInfo['DISCHARGE_DATE'])) {
-
-                die("This patient has already been discharged.");
-
-            }
-
-
-            /* ----------------------------------------------------------
-               Check medication start/end date
-            ---------------------------------------------------------- */
-
-            $dateCheck = $conn->prepare("
-                SELECT COUNT(*)
-                FROM SYARMIMI.MEDICATION_ORDER mo
-                LEFT JOIN SYARMIMI.ADMISSION a
-                    ON mo.ADMISSION_ID = a.ADMISSION_ID
-
-                WHERE mo.MEDORDER_ID = ?
-
-                  AND TRUNC(SYSDATE) >=
-                      TRUNC(
-                          NVL(
-                              mo.MED_START_DATE,
-                              a.ADMISSION_DATE
-                          )
-                      )
-
-                  AND
-                  (
-                      mo.MED_END_DATE IS NULL
-                      OR
-                      TRUNC(SYSDATE) <= TRUNC(mo.MED_END_DATE)
-                  )
-
-                  AND
-                  (
-                      a.EXPECTED_DISCHARGE_DATE IS NULL
-                      OR
-                      TRUNC(SYSDATE) <=
-                      TRUNC(a.EXPECTED_DISCHARGE_DATE)
-                  )
-            ");
-
-            $dateCheck->execute([
-                $medOrderId
-            ]);
-
-            $activeToday = (int) $dateCheck->fetchColumn();
-
-
-            if ($activeToday === 0) {
-
-                die(
-                    "This medication is not active for today."
-                );
-
-            }
-
-
-            /* ----------------------------------------------------------
-               CHECK TODAY'S PREPARATION ONLY
-            ---------------------------------------------------------- */
-
-            $checkStmt = $conn->prepare("
-                SELECT COUNT(*)
-                FROM SYARMIMI.PHARMACY_PREPARATION
-                WHERE MEDORDER_ID = ?
-                  AND TRUNC(PREPARED_TIME) = TRUNC(SYSDATE)
-            ");
-
-            $checkStmt->execute([
-                $medOrderId
-            ]);
-
-            $alreadyPreparedToday =
-                (int) $checkStmt->fetchColumn();
-
-
-            if ($alreadyPreparedToday > 0) {
-
-                redirectWithFilters(
-                    "pharmacy_preparation.php",
-                    [
-                        'success' => 'already'
-                    ]
-                );
-
-            }
-
-
-            /* ----------------------------------------------------------
-               ADMISSION STATUS
-            ---------------------------------------------------------- */
-
-            $status = 'Ready For Nurse Pickup';
-
-
-        } else {
-
-            /* ==========================================================
-               APPOINTMENT / WALK-IN
-               
-               These are prepared only once.
-            ========================================================== */
-
-            $checkStmt = $conn->prepare("
-                SELECT COUNT(*)
-                FROM SYARMIMI.PHARMACY_PREPARATION
-                WHERE MEDORDER_ID = ?
-            ");
-
-            $checkStmt->execute([
-                $medOrderId
-            ]);
-
-            $alreadyPrepared =
-                (int) $checkStmt->fetchColumn();
-
-
-            if ($alreadyPrepared > 0) {
-
-                redirectWithFilters(
-                    "pharmacy_preparation.php",
-                    [
-                        'success' => 'already'
-                    ]
-                );
-
-            }
-
-
-            $status = 'Ready For Pickup';
-
+            throw new Exception(
+                "Admission medication must be prepared using its scheduled dose."
+            );
         }
 
 
-        /* ==============================================================
-           INSERT PREPARATION
-        ============================================================== */
+        /* =================================================
+           DETERMINE TYPE
+        ================================================= */
 
-        $insertStmt = $conn->prepare("
-            INSERT INTO SYARMIMI.PHARMACY_PREPARATION
-            (
-                PREP_ID,
-                STATUS,
-                PREPARED_TIME,
-                MEDORDER_ID,
-                ACCOUNT_ID
+        $orderType =
+            strtoupper(
+                trim(
+                    (string)(
+                        $order[
+                            'ORDER_TYPE'
+                        ]
+                        ?? ''
+                    )
+                )
+            );
+
+
+        /*
+           Legacy fallback:
+           old rows may have ORDER_TYPE NULL.
+        */
+
+        if ($orderType === '') {
+
+            if (
+                !empty(
+                    $order[
+                        'APPOINTMENT_ID'
+                    ]
+                )
+            ) {
+
+                $orderType =
+                    'APPOINTMENT';
+
+            }
+            elseif (
+                !empty(
+                    $order[
+                        'CONSULTATION_ID'
+                    ]
+                )
+            ) {
+
+                $orderType =
+                    'WALKIN';
+            }
+        }
+
+
+        if (
+            !in_array(
+                $orderType,
+                [
+                    'APPOINTMENT',
+                    'WALKIN',
+                    'DISCHARGE'
+                ],
+                true
             )
-            VALUES
-            (
-                SYARMIMI.PREPARATION_SEQ.NEXTVAL,
-                ?,
-                SYSDATE,
-                ?,
-                ?
+        ) {
+
+            throw new Exception(
+                "Invalid patient-pickup medication order."
+            );
+        }
+
+
+        /* =================================================
+           DISCHARGE ORDER MUST HAVE PATIENT
+        ================================================= */
+
+        if (
+            $orderType === 'DISCHARGE'
+            &&
+            empty(
+                $order[
+                    'PATIENT_ID'
+                ]
             )
-        ");
+        ) {
 
-        $insertStmt->execute([
-            $status,
-            $medOrderId,
-            $staffId
-        ]);
-
-
-        /* ==============================================================
-           SUCCESS REDIRECT
-        ============================================================== */
-
-        redirectWithFilters(
-            "pharmacy_preparation.php",
-            [
-                'success' => '1'
-            ]
-        );
+            throw new Exception(
+                "Discharge medication is not linked to a patient."
+            );
+        }
 
 
-    } catch (PDOException $e) {
+        /* =================================================
+           CHECK ALREADY PREPARED
+        ================================================= */
 
-        die(
-            "Error preparing medication: " .
-            htmlspecialchars($e->getMessage())
-        );
+        $checkPrep =
+            $conn->prepare("
 
-    }
-}
+                SELECT
+                    COUNT(*)
+
+                FROM
+                    SYARMIMI.PHARMACY_PREPARATION
+
+                WHERE
+                    MEDORDER_ID = ?
+
+                AND
+                    SCHEDULE_ID
+                    IS NULL
+
+            ");
 
 
-/* ==========================================================================
-   HANDLE PATIENT COLLECTION
-========================================================================== */
-
-if (isset($_GET['collect'])) {
-
-    $medOrderId = (int) $_GET['collect'];
-
-    try {
-
-        /* --------------------------------------------------------------
-           Appointment / Walk-In ONLY
-        -------------------------------------------------------------- */
-
-        $updateStmt = $conn->prepare("
-            UPDATE SYARMIMI.PHARMACY_PREPARATION pp
-
-            SET pp.STATUS = 'Collected'
-
-            WHERE pp.MEDORDER_ID = ?
-
-              AND pp.STATUS = 'Ready For Pickup'
-
-              AND EXISTS
-              (
-                  SELECT 1
-
-                  FROM SYARMIMI.MEDICATION_ORDER mo
-
-                  WHERE mo.MEDORDER_ID = pp.MEDORDER_ID
-
-                    AND mo.ADMISSION_ID IS NULL
-              )
-        ");
-
-        $updateStmt->execute([
+        $checkPrep->execute([
             $medOrderId
         ]);
 
 
-        redirectWithFilters(
-            "pharmacy_preparation.php",
-            [
-                'collected' => '1'
-            ]
-        );
+        if (
+            (int)$checkPrep
+                ->fetchColumn()
+            > 0
+        ) {
+
+            $conn->rollBack();
 
 
-    } catch (PDOException $e) {
+            redirectWithFilters([
+                'success' =>
+                    'already'
+            ]);
+        }
 
-        die(
-            "Error updating collection status: " .
-            htmlspecialchars($e->getMessage())
-        );
 
+        /* =================================================
+           INSERT PREPARATION
+        ================================================= */
+
+        $insertPrep =
+            $conn->prepare("
+
+                INSERT INTO
+                    SYARMIMI.PHARMACY_PREPARATION
+                (
+                    PREP_ID,
+                    STATUS,
+                    PREPARED_TIME,
+                    MEDORDER_ID,
+                    ACCOUNT_ID,
+                    SCHEDULE_ID
+                )
+
+                VALUES
+                (
+                    SYARMIMI.PREPARATION_SEQ.NEXTVAL,
+
+                    'Ready For Pickup',
+
+                    SYSDATE,
+
+                    ?,
+
+                    ?,
+
+                    NULL
+                )
+
+            ");
+
+
+        $insertPrep->execute([
+
+            $medOrderId,
+
+            $staffId
+
+        ]);
+
+
+        $conn->commit();
+
+
+        redirectWithFilters([
+            'success' => '1'
+        ]);
+
+    }
+    catch (Throwable $e) {
+
+        if (
+            $conn->inTransaction()
+        ) {
+
+            $conn->rollBack();
+        }
+
+
+        redirectWithFilters([
+
+            'error' =>
+                'prepare_failed',
+
+            'message' =>
+                $e->getMessage()
+
+        ]);
     }
 }
 
 
-/* ==========================================================================
-   PENDING COUNT
-========================================================================== */
+/* =========================================================
+   COLLECT PATIENT-PICKUP MEDICATION
 
-/*
-   Pending means:
+   Appointment
+   Walk-In
+   Discharge
+========================================================= */
 
-   APPOINTMENT / WALK-IN:
-       No preparation exists.
+if (
+    isset(
+        $_GET['collect']
+    )
+) {
 
-   ADMISSION:
-       Medication is active TODAY
-       AND
-       there is NO preparation for TODAY.
-*/
+    $medOrderId =
+        (int)(
+            $_GET['collect']
+            ?? 0
+        );
 
-$pendingStmt = $conn->query("
 
-    SELECT COUNT(*)
+    if ($medOrderId <= 0) {
 
-    FROM SYARMIMI.MEDICATION_ORDER mo
+        redirectWithFilters([
+            'error' => 'invalid'
+        ]);
+    }
 
-    LEFT JOIN SYARMIMI.ADMISSION a
-        ON mo.ADMISSION_ID = a.ADMISSION_ID
 
-    LEFT JOIN
-    (
-        SELECT
-            MEDORDER_ID,
-            COUNT(*) AS TODAY_PREPARED
+    try {
 
-        FROM SYARMIMI.PHARMACY_PREPARATION
+        $conn->beginTransaction();
 
-        WHERE TRUNC(PREPARED_TIME) = TRUNC(SYSDATE)
 
-        GROUP BY MEDORDER_ID
+        /* =================================================
+           VERIFY ORDER IS PATIENT PICKUP
+        ================================================= */
 
-    ) today_pp
+        $orderStmt =
+            $conn->prepare("
 
-        ON mo.MEDORDER_ID = today_pp.MEDORDER_ID
+                SELECT
 
-    WHERE
+                    MEDORDER_ID,
+                    ADMISSION_ID,
+                    APPOINTMENT_ID,
+                    CONSULTATION_ID,
+                    ORDER_TYPE
 
-    (
+                FROM
+                    SYARMIMI.MEDICATION_ORDER
 
-        /* ----------------------------------------------------------
-           ADMISSION MEDICATION
-        ---------------------------------------------------------- */
+                WHERE
+                    MEDORDER_ID = ?
 
-        mo.ADMISSION_ID IS NOT NULL
+                FOR UPDATE
 
-        AND a.DISCHARGE_DATE IS NULL
+            ");
 
-        AND TRUNC(SYSDATE) >=
-            TRUNC(
-                NVL(
-                    mo.MED_START_DATE,
-                    a.ADMISSION_DATE
+
+        $orderStmt->execute([
+            $medOrderId
+        ]);
+
+
+        $order =
+            $orderStmt->fetch(
+                PDO::FETCH_ASSOC
+            );
+
+
+        if (!$order) {
+
+            throw new Exception(
+                "Medication order not found."
+            );
+        }
+
+
+        if (
+            !empty(
+                $order[
+                    'ADMISSION_ID'
+                ]
+            )
+        ) {
+
+            throw new Exception(
+                "Inpatient medication cannot be collected directly by the patient."
+            );
+        }
+
+
+        $orderType =
+            strtoupper(
+                trim(
+                    (string)(
+                        $order[
+                            'ORDER_TYPE'
+                        ]
+                        ?? ''
+                    )
                 )
+            );
+
+
+        if ($orderType === '') {
+
+            if (
+                !empty(
+                    $order[
+                        'APPOINTMENT_ID'
+                    ]
+                )
+            ) {
+
+                $orderType =
+                    'APPOINTMENT';
+
+            }
+            elseif (
+                !empty(
+                    $order[
+                        'CONSULTATION_ID'
+                    ]
+                )
+            ) {
+
+                $orderType =
+                    'WALKIN';
+            }
+        }
+
+
+        if (
+            !in_array(
+                $orderType,
+                [
+                    'APPOINTMENT',
+                    'WALKIN',
+                    'DISCHARGE'
+                ],
+                true
+            )
+        ) {
+
+            throw new Exception(
+                "Invalid patient-pickup medication."
+            );
+        }
+
+
+        /* =================================================
+           UPDATE LATEST PREPARATION
+        ================================================= */
+
+        $prepStmt =
+            $conn->prepare("
+
+                SELECT
+
+                    PREP_ID,
+                    STATUS
+
+                FROM
+                    SYARMIMI.PHARMACY_PREPARATION
+
+                WHERE
+                    MEDORDER_ID = ?
+
+                AND
+                    SCHEDULE_ID
+                    IS NULL
+
+                ORDER BY
+                    PREP_ID DESC
+
+                FETCH FIRST
+                    1 ROW ONLY
+
+                FOR UPDATE
+
+            ");
+
+
+        $prepStmt->execute([
+            $medOrderId
+        ]);
+
+
+        $prep =
+            $prepStmt->fetch(
+                PDO::FETCH_ASSOC
+            );
+
+
+        if (!$prep) {
+
+            throw new Exception(
+                "Medication has not been prepared yet."
+            );
+        }
+
+
+        $prepStatus =
+            strtoupper(
+                trim(
+                    (string)(
+                        $prep[
+                            'STATUS'
+                        ]
+                        ?? ''
+                    )
+                )
+            );
+
+
+        if (
+            $prepStatus ===
+            'COLLECTED'
+        ) {
+
+            $conn->rollBack();
+
+
+            redirectWithFilters([
+                'collected' =>
+                    'already'
+            ]);
+        }
+
+
+        if (
+            $prepStatus !==
+            'READY FOR PICKUP'
+        ) {
+
+            throw new Exception(
+                "This medication is not currently ready for patient collection."
+            );
+        }
+
+
+        $updateStmt =
+            $conn->prepare("
+
+                UPDATE
+                    SYARMIMI.PHARMACY_PREPARATION
+
+                SET
+                    STATUS =
+                    'Collected'
+
+                WHERE
+                    PREP_ID = ?
+
+            ");
+
+
+        $updateStmt->execute([
+            $prep[
+                'PREP_ID'
+            ]
+        ]);
+
+
+        $conn->commit();
+
+
+        redirectWithFilters([
+            'collected' => '1'
+        ]);
+
+    }
+    catch (Throwable $e) {
+
+        if (
+            $conn->inTransaction()
+        ) {
+
+            $conn->rollBack();
+        }
+
+
+        redirectWithFilters([
+
+            'error' =>
+                'collect_failed',
+
+            'message' =>
+                $e->getMessage()
+
+        ]);
+    }
+}
+
+
+/* =========================================================
+   PENDING ADMISSION TODAY
+
+   Only active INPATIENT scheduled doses.
+
+   Cancelled/discharged schedules excluded.
+========================================================= */
+
+$pendingAdmissionStmt =
+    $conn->query("
+
+        SELECT
+            COUNT(*)
+
+        FROM
+            SYARMIMI.MEDICATION_SCHEDULE MS
+
+        JOIN
+            SYARMIMI.MEDICATION_ORDER MO
+
+            ON
+                MS.MEDORDER_ID =
+                MO.MEDORDER_ID
+
+        JOIN
+            SYARMIMI.ADMISSION A
+
+            ON
+                MO.ADMISSION_ID =
+                A.ADMISSION_ID
+
+        WHERE
+            MO.ADMISSION_ID
+            IS NOT NULL
+
+        AND
+        (
+            MO.ORDER_TYPE
+            IS NULL
+
+            OR
+
+            UPPER(
+                TRIM(
+                    MO.ORDER_TYPE
+                )
+            )
+            =
+            'INPATIENT'
+        )
+
+        AND
+            A.DISCHARGE_DATE
+            IS NULL
+
+        AND
+            TRUNC(
+                MS.SCHEDULE_DATE
+            )
+            =
+            TRUNC(
+                SYSDATE
             )
 
         AND
         (
-            mo.MED_END_DATE IS NULL
+            MO.MED_START_DATE
+            IS NULL
+
             OR
-            TRUNC(SYSDATE) <= TRUNC(mo.MED_END_DATE)
+
+            TRUNC(
+                MS.SCHEDULE_DATE
+            )
+            >=
+            TRUNC(
+                MO.MED_START_DATE
+            )
         )
 
         AND
         (
-            a.EXPECTED_DISCHARGE_DATE IS NULL
+            MO.MED_END_DATE
+            IS NULL
+
             OR
-            TRUNC(SYSDATE) <=
-            TRUNC(a.EXPECTED_DISCHARGE_DATE)
+
+            TRUNC(
+                MS.SCHEDULE_DATE
+            )
+            <=
+            TRUNC(
+                MO.MED_END_DATE
+            )
         )
 
-        AND NVL(today_pp.TODAY_PREPARED, 0) = 0
+        AND
+        (
+            A.EXPECTED_DISCHARGE_DATE
+            IS NULL
 
-    )
+            OR
 
-    OR
-
-    (
-
-        /* ----------------------------------------------------------
-           APPOINTMENT / WALK-IN
-        ---------------------------------------------------------- */
-
-        mo.ADMISSION_ID IS NULL
-
-        AND today_pp.MEDORDER_ID IS NULL
+            TRUNC(
+                MS.SCHEDULE_DATE
+            )
+            <=
+            TRUNC(
+                A.EXPECTED_DISCHARGE_DATE
+            )
+        )
 
         AND NOT EXISTS
         (
             SELECT 1
 
-            FROM SYARMIMI.PHARMACY_PREPARATION pp2
+            FROM
+                SYARMIMI.PHARMACY_PREPARATION PP
 
-            WHERE pp2.MEDORDER_ID = mo.MEDORDER_ID
+            WHERE
+                PP.SCHEDULE_ID =
+                MS.SCHEDULE_ID
         )
 
-    )
+        AND
+            UPPER(
+                TRIM(
+                    NVL(
+                        MS.STATUS,
+                        'Pending Preparation'
+                    )
+                )
+            )
+            =
+            'PENDING PREPARATION'
 
-");
-
-$pendingCount = (int) $pendingStmt->fetchColumn();
-
-
-/* ==========================================================================
-   FETCH MEDICATION ORDERS
-========================================================================== */
-
-/*
-   IMPORTANT:
-
-   Admission medication may have PATIENT_ID = NULL in
-   MEDICATION_ORDER.
-
-   Therefore:
-
-       Admission
-           MEDICATION_ORDER
-               ↓
-           ADMISSION
-               ↓
-            PATIENT
-
-   is used.
-
-   Appointment / Walk-In still uses MEDICATION_ORDER.PATIENT_ID.
-*/
-
-$sql = "
-
-SELECT
-
-    mo.MEDORDER_ID,
-
-    /* ==============================================================
-       PATIENT NAME
-    ============================================================== */
-
-    CASE
-
-        WHEN mo.ADMISSION_ID IS NOT NULL
-            THEN pa.NAME
-
-        ELSE
-            p.NAME
-
-    END AS PATIENT_NAME,
+    ");
 
 
-    /* ==============================================================
-       MEDICATION
-    ============================================================== */
-
-    m.MEDICATION_NAME,
+$pendingAdmission =
+    (int)$pendingAdmissionStmt
+        ->fetchColumn();
 
 
-    mo.DOSAGE,
+/* =========================================================
+   PENDING APPOINTMENT / WALK-IN
+========================================================= */
 
-    mo.FREQUENCY,
+$pendingOutpatientStmt =
+    $conn->query("
+
+        SELECT
+            COUNT(*)
+
+        FROM
+            SYARMIMI.MEDICATION_ORDER MO
+
+        WHERE
+            MO.ADMISSION_ID
+            IS NULL
+
+        AND
+        (
+            UPPER(
+                TRIM(
+                    NVL(
+                        MO.ORDER_TYPE,
+                        'UNKNOWN'
+                    )
+                )
+            )
+            IN
+            (
+                'APPOINTMENT',
+                'WALKIN'
+            )
+
+            OR
+
+            (
+                MO.ORDER_TYPE
+                IS NULL
+
+                AND
+                (
+                    MO.APPOINTMENT_ID
+                    IS NOT NULL
+
+                    OR
+
+                    MO.CONSULTATION_ID
+                    IS NOT NULL
+                )
+            )
+        )
+
+        AND NOT EXISTS
+        (
+            SELECT 1
+
+            FROM
+                SYARMIMI.PHARMACY_PREPARATION PP
+
+            WHERE
+                PP.MEDORDER_ID =
+                MO.MEDORDER_ID
+
+            AND
+                PP.SCHEDULE_ID
+                IS NULL
+        )
+
+    ");
 
 
-    /* ==============================================================
-       LOCATION
-    ============================================================== */
-
-    CASE
-
-        WHEN mo.ADMISSION_ID IS NOT NULL
-            THEN NVL(w.WARD_NAME, 'Ward')
-
-        ELSE
-            'Pharmacy Counter'
-
-    END AS WARD_NAME,
+$pendingOutpatient =
+    (int)$pendingOutpatientStmt
+        ->fetchColumn();
 
 
-    CASE
+/* =========================================================
+   PENDING DISCHARGE MEDICATION
+========================================================= */
 
-        WHEN mo.ADMISSION_ID IS NOT NULL
-            THEN NVL(b.BED_NUMBER, '-')
+$pendingDischargeStmt =
+    $conn->query("
 
-        ELSE
+        SELECT
+            COUNT(*)
+
+        FROM
+            SYARMIMI.MEDICATION_ORDER MO
+
+        WHERE
+            MO.ADMISSION_ID
+            IS NULL
+
+        AND
+            UPPER(
+                TRIM(
+                    NVL(
+                        MO.ORDER_TYPE,
+                        'UNKNOWN'
+                    )
+                )
+            )
+            =
+            'DISCHARGE'
+
+        AND NOT EXISTS
+        (
+            SELECT 1
+
+            FROM
+                SYARMIMI.PHARMACY_PREPARATION PP
+
+            WHERE
+                PP.MEDORDER_ID =
+                MO.MEDORDER_ID
+
+            AND
+                PP.SCHEDULE_ID
+                IS NULL
+        )
+
+    ");
+
+
+$pendingDischarge =
+    (int)$pendingDischargeStmt
+        ->fetchColumn();
+
+
+$pendingCount =
+    $pendingAdmission
+    +
+    $pendingOutpatient
+    +
+    $pendingDischarge;
+
+
+/* =========================================================
+   ADMISSION MEDICATION RECORDS
+
+   Keep historical active/discharged admission records.
+
+   ORDER_TYPE DB:
+   INPATIENT
+
+   DISPLAY:
+   Admission
+========================================================= */
+
+$admissionSql = "
+
+    SELECT
+
+        MS.SCHEDULE_ID,
+
+        MO.MEDORDER_ID,
+
+        MO.ADMISSION_ID,
+
+        PA.NAME
+        AS PATIENT_NAME,
+
+        M.MEDICATION_NAME,
+
+        MO.DOSAGE,
+
+        MO.FREQUENCY,
+
+        W.WARD_NAME,
+
+        B.BED_NUMBER,
+
+        'Admission'
+        AS DISPLAY_ORDER_TYPE,
+
+        MO.ORDER_TYPE
+        AS DATABASE_ORDER_TYPE,
+
+        'Nurse Pickup'
+        AS COLLECTION_METHOD,
+
+        CASE
+
+            WHEN
+                MS.SCHEDULE_DATE
+                IS NOT NULL
+
+            THEN
+                TO_CHAR(
+                    MS.SCHEDULE_DATE,
+                    'DD-MON-YYYY'
+                )
+
+            ELSE
+                '-'
+
+        END
+        AS SCHEDULE_DATE_DISPLAY,
+
+        TO_CHAR(
+            MS.SCHEDULE_DATE,
+            'YYYY-MM-DD'
+        )
+        AS SCHEDULE_DATE_VALUE,
+
+        TO_CHAR(
+            NVL(
+                MS.SCHEDULE_DATE,
+                NVL(
+                    MO.MED_START_DATE,
+                    A.ADMISSION_DATE
+                )
+            ),
+            'YYYY-MM-DD'
+        )
+        AS FILTER_DATE_VALUE,
+
+        NVL(
+            MS.SCHEDULE_TIME,
             '-'
+        )
+        AS SCHEDULE_TIME,
 
-    END AS BED_NUMBER,
+        MS.STATUS
+        AS SCHEDULE_STATUS,
+
+        PP.STATUS
+        AS PREPARATION_STATUS,
 
+        PP.PREPARED_TIME,
 
-    /* ==============================================================
-       ORDER TYPE
-    ============================================================== */
+        MO.MED_START_DATE,
 
-    CASE
+        MO.MED_END_DATE,
 
-        WHEN mo.ADMISSION_ID IS NOT NULL
-            THEN 'Admission'
+        A.ADMISSION_DATE,
 
-        WHEN mo.APPOINTMENT_ID IS NOT NULL
-            THEN 'Appointment'
+        A.EXPECTED_DISCHARGE_DATE,
 
-        WHEN mo.CONSULTATION_ID IS NOT NULL
-            THEN 'Walk-In'
+        A.DISCHARGE_DATE,
 
-        ELSE
-            'Unknown'
+        1
+        AS IS_ADMISSION,
 
-    END AS ORDER_TYPE,
+        CASE
 
+            WHEN
+                MS.SCHEDULE_ID
+                IS NULL
 
-    /* ==============================================================
-       COLLECTION METHOD
-    ============================================================== */
+            THEN
+                0
 
-    CASE
+            ELSE
+                1
 
-        WHEN mo.ADMISSION_ID IS NOT NULL
-            THEN 'Nurse Pickup'
+        END
+        AS HAS_SCHEDULE,
 
-        ELSE
-            'Patient Pickup'
+        CASE
 
-    END AS COLLECTION_METHOD,
+            WHEN
+                MS.SCHEDULE_DATE
+                IS NOT NULL
 
+            THEN
+                TO_CHAR(
+                    MS.SCHEDULE_DATE,
+                    'YYYYMMDD'
+                )
+                ||
+                REPLACE(
+                    NVL(
+                        MS.SCHEDULE_TIME,
+                        '00:00'
+                    ),
+                    ':',
+                    ''
+                )
 
-    /* ==============================================================
-       TODAY'S PREPARATION
-    ============================================================== */
+            ELSE
+                TO_CHAR(
+                    NVL(
+                        MO.MED_START_DATE,
+                        A.ADMISSION_DATE
+                    ),
+                    'YYYYMMDD'
+                )
+                ||
+                '9999'
+                ||
+                LPAD(
+                    TO_CHAR(
+                        MO.MEDORDER_ID
+                    ),
+                    10,
+                    '0'
+                )
 
-    today_pp.STATUS AS TODAY_STATUS,
+        END
+        AS SORT_KEY
 
+    FROM
+        SYARMIMI.MEDICATION_ORDER MO
 
-    /* ==============================================================
-       LATEST PREPARATION FOR NON-ADMISSION
-    ============================================================== */
+    JOIN
+        SYARMIMI.ADMISSION A
 
-    latest_pp.STATUS AS LATEST_STATUS,
+        ON
+            MO.ADMISSION_ID =
+            A.ADMISSION_ID
 
+    JOIN
+        SYARMIMI.PATIENT PA
 
-    /* ==============================================================
-       MEDICATION DATES
-    ============================================================== */
+        ON
+            A.PATIENT_ID =
+            PA.PATIENT_ID
 
-    mo.MED_START_DATE,
+    JOIN
+        SYARMIMI.MEDICATION M
 
-    mo.MED_END_DATE,
+        ON
+            MO.MEDICATION_ID =
+            M.MEDICATION_ID
 
-    a.EXPECTED_DISCHARGE_DATE,
+    LEFT JOIN
+        SYARMIMI.MEDICATION_SCHEDULE MS
 
-    a.DISCHARGE_DATE
+        ON
+            MO.MEDORDER_ID =
+            MS.MEDORDER_ID
 
+    LEFT JOIN
+        SYARMIMI.BED B
 
-FROM SYARMIMI.MEDICATION_ORDER mo
+        ON
+            A.BED_ID =
+            B.BED_ID
 
+    LEFT JOIN
+        SYARMIMI.WARD W
 
-/* ==============================================================
-   NORMAL PATIENT
-================================================================ */
+        ON
+            B.WARD_ID =
+            W.WARD_ID
 
-LEFT JOIN SYARMIMI.PATIENT p
-    ON mo.PATIENT_ID = p.PATIENT_ID
+    LEFT JOIN
+    (
+        SELECT
 
+            PP1.SCHEDULE_ID,
 
-/* ==============================================================
-   ADMISSION
-================================================================ */
+            PP1.MEDORDER_ID,
 
-LEFT JOIN SYARMIMI.ADMISSION a
-    ON mo.ADMISSION_ID = a.ADMISSION_ID
+            PP1.STATUS,
 
+            PP1.PREPARED_TIME,
 
-/* ==============================================================
-   ADMISSION PATIENT
-================================================================ */
+            PP1.PREP_ID
 
-LEFT JOIN SYARMIMI.PATIENT pa
-    ON a.PATIENT_ID = pa.PATIENT_ID
+        FROM
+            SYARMIMI.PHARMACY_PREPARATION PP1
 
+        JOIN
+        (
+            SELECT
 
-/* ==============================================================
-   MEDICATION
-================================================================ */
+                SCHEDULE_ID,
 
-INNER JOIN SYARMIMI.MEDICATION m
-    ON mo.MEDICATION_ID = m.MEDICATION_ID
+                MAX(PREP_ID)
+                AS MAX_PREP_ID
 
+            FROM
+                SYARMIMI.PHARMACY_PREPARATION
 
-/* ==============================================================
-   BED
-================================================================ */
+            WHERE
+                SCHEDULE_ID
+                IS NOT NULL
 
-LEFT JOIN SYARMIMI.BED b
-    ON a.BED_ID = b.BED_ID
+            GROUP BY
+                SCHEDULE_ID
 
+        )
+        LATEST
 
-/* ==============================================================
-   WARD
-================================================================ */
+        ON
+            PP1.PREP_ID =
+            LATEST.MAX_PREP_ID
 
-LEFT JOIN SYARMIMI.WARD w
-    ON b.WARD_ID = w.WARD_ID
+    )
+    PP
 
+    ON
+        PP.SCHEDULE_ID =
+        MS.SCHEDULE_ID
 
-/* ==============================================================
-   TODAY'S PREPARATION
+    WHERE
+        MO.ADMISSION_ID
+        IS NOT NULL
 
-   One preparation per medication order per day.
-================================================================ */
+    AND
+    (
+        MO.ORDER_TYPE
+        IS NULL
 
-LEFT JOIN
-(
-    SELECT
-        MEDORDER_ID,
-        MAX(PREP_ID) AS PREP_ID
-    FROM SYARMIMI.PHARMACY_PREPARATION
-    WHERE TRUNC(PREPARED_TIME) = TRUNC(SYSDATE)
-    GROUP BY MEDORDER_ID
-) today_ids
+        OR
 
-    ON mo.MEDORDER_ID = today_ids.MEDORDER_ID
-
-
-LEFT JOIN SYARMIMI.PHARMACY_PREPARATION today_pp
-
-    ON today_ids.PREP_ID = today_pp.PREP_ID
-
-
-/* ==============================================================
-   LATEST PREPARATION
-
-   Used mainly for Appointment / Walk-In.
-================================================================ */
-
-LEFT JOIN
-(
-    SELECT
-        MEDORDER_ID,
-        MAX(PREP_ID) AS PREP_ID
-    FROM SYARMIMI.PHARMACY_PREPARATION
-    GROUP BY MEDORDER_ID
-) latest_ids
-
-    ON mo.MEDORDER_ID = latest_ids.MEDORDER_ID
-
-
-LEFT JOIN SYARMIMI.PHARMACY_PREPARATION latest_pp
-
-    ON latest_ids.PREP_ID = latest_pp.PREP_ID
-
-
-ORDER BY mo.MEDORDER_ID DESC
+        UPPER(
+            TRIM(
+                MO.ORDER_TYPE
+            )
+        )
+        =
+        'INPATIENT'
+    )
 
 ";
 
-$stmt = $conn->query($sql);
 
-$orders = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$admissionStmt =
+    $conn->query(
+        $admissionSql
+    );
+
+
+$admissionOrders =
+    $admissionStmt
+        ->fetchAll(
+            PDO::FETCH_ASSOC
+        );
+
+
+/* =========================================================
+   APPOINTMENT / WALK-IN / DISCHARGE
+
+   Patient-pickup medication.
+
+   No schedule required.
+========================================================= */
+
+$outpatientSql = "
+
+    SELECT
+
+        NULL
+        AS SCHEDULE_ID,
+
+        MO.MEDORDER_ID,
+
+        NULL
+        AS ADMISSION_ID,
+
+        P.NAME
+        AS PATIENT_NAME,
+
+        M.MEDICATION_NAME,
+
+        MO.DOSAGE,
+
+        MO.FREQUENCY,
+
+        'Pharmacy Counter'
+        AS WARD_NAME,
+
+        '-'
+        AS BED_NUMBER,
+
+        CASE
+
+            WHEN
+                UPPER(
+                    TRIM(
+                        NVL(
+                            MO.ORDER_TYPE,
+                            'UNKNOWN'
+                        )
+                    )
+                )
+                =
+                'DISCHARGE'
+
+            THEN
+                'Discharge'
+
+            WHEN
+                UPPER(
+                    TRIM(
+                        NVL(
+                            MO.ORDER_TYPE,
+                            'UNKNOWN'
+                        )
+                    )
+                )
+                =
+                'APPOINTMENT'
+
+            THEN
+                'Appointment'
+
+            WHEN
+                UPPER(
+                    TRIM(
+                        NVL(
+                            MO.ORDER_TYPE,
+                            'UNKNOWN'
+                        )
+                    )
+                )
+                =
+                'WALKIN'
+
+            THEN
+                'Walk-In'
+
+            WHEN
+                MO.APPOINTMENT_ID
+                IS NOT NULL
+
+            THEN
+                'Appointment'
+
+            WHEN
+                MO.CONSULTATION_ID
+                IS NOT NULL
+
+            THEN
+                'Walk-In'
+
+            ELSE
+                'Unknown'
+
+        END
+        AS DISPLAY_ORDER_TYPE,
+
+        MO.ORDER_TYPE
+        AS DATABASE_ORDER_TYPE,
+
+        'Patient Pickup'
+        AS COLLECTION_METHOD,
+
+        '-'
+        AS SCHEDULE_DATE_DISPLAY,
+
+        NULL
+        AS SCHEDULE_DATE_VALUE,
+
+        TO_CHAR(
+            NVL(
+                MO.MED_START_DATE,
+                SYSDATE
+            ),
+            'YYYY-MM-DD'
+        )
+        AS FILTER_DATE_VALUE,
+
+        '-'
+        AS SCHEDULE_TIME,
+
+        NULL
+        AS SCHEDULE_STATUS,
+
+        PP.STATUS
+        AS PREPARATION_STATUS,
+
+        PP.PREPARED_TIME,
+
+        MO.MED_START_DATE,
+
+        MO.MED_END_DATE,
+
+        NULL
+        AS ADMISSION_DATE,
+
+        NULL
+        AS EXPECTED_DISCHARGE_DATE,
+
+        NULL
+        AS DISCHARGE_DATE,
+
+        0
+        AS IS_ADMISSION,
+
+        0
+        AS HAS_SCHEDULE,
+
+        TO_CHAR(
+            NVL(
+                MO.MED_START_DATE,
+                SYSDATE
+            ),
+            'YYYYMMDD'
+        )
+        ||
+        '5000'
+        ||
+        LPAD(
+            TO_CHAR(
+                MO.MEDORDER_ID
+            ),
+            10,
+            '0'
+        )
+        AS SORT_KEY
+
+    FROM
+        SYARMIMI.MEDICATION_ORDER MO
+
+    LEFT JOIN
+        SYARMIMI.PATIENT P
+
+        ON
+            MO.PATIENT_ID =
+            P.PATIENT_ID
+
+    JOIN
+        SYARMIMI.MEDICATION M
+
+        ON
+            MO.MEDICATION_ID =
+            M.MEDICATION_ID
+
+    LEFT JOIN
+    (
+        SELECT
+
+            PP1.MEDORDER_ID,
+
+            PP1.STATUS,
+
+            PP1.PREPARED_TIME,
+
+            PP1.PREP_ID
+
+        FROM
+            SYARMIMI.PHARMACY_PREPARATION PP1
+
+        JOIN
+        (
+            SELECT
+
+                MEDORDER_ID,
+
+                MAX(PREP_ID)
+                AS MAX_PREP_ID
+
+            FROM
+                SYARMIMI.PHARMACY_PREPARATION
+
+            WHERE
+                SCHEDULE_ID
+                IS NULL
+
+            GROUP BY
+                MEDORDER_ID
+
+        )
+        LATEST
+
+        ON
+            PP1.PREP_ID =
+            LATEST.MAX_PREP_ID
+
+    )
+    PP
+
+    ON
+        PP.MEDORDER_ID =
+        MO.MEDORDER_ID
+
+    WHERE
+        MO.ADMISSION_ID
+        IS NULL
+
+    AND
+    (
+        UPPER(
+            TRIM(
+                NVL(
+                    MO.ORDER_TYPE,
+                    'UNKNOWN'
+                )
+            )
+        )
+        IN
+        (
+            'APPOINTMENT',
+            'WALKIN',
+            'DISCHARGE'
+        )
+
+        OR
+
+        (
+            MO.ORDER_TYPE
+            IS NULL
+
+            AND
+            (
+                MO.APPOINTMENT_ID
+                IS NOT NULL
+
+                OR
+
+                MO.CONSULTATION_ID
+                IS NOT NULL
+            )
+        )
+    )
+
+";
+
+
+$outpatientStmt =
+    $conn->query(
+        $outpatientSql
+    );
+
+
+$outpatientOrders =
+    $outpatientStmt
+        ->fetchAll(
+            PDO::FETCH_ASSOC
+        );
+
+
+/* =========================================================
+   MERGE ALL RECORDS
+========================================================= */
+
+$orders =
+    array_merge(
+        $admissionOrders,
+        $outpatientOrders
+    );
 
 ?>
 
 <!DOCTYPE html>
+
 <html lang="en">
 
 <head>
@@ -779,237 +2201,1285 @@ $orders = $stmt->fetchAll(PDO::FETCH_ASSOC);
     content="width=device-width, initial-scale=1.0"
 >
 
-<title>Prepare Medication</title>
+<title>
+Prepare Medication
+</title>
+
 
 <link
     href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
     rel="stylesheet"
 >
 
+
 <link
-    href="https://cdn.jsdelivr.net/npm/bootstrap-icons/font/bootstrap-icons.css"
+    href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"
     rel="stylesheet"
 >
+
 
 <link
     rel="stylesheet"
     href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css"
 >
 
+
 <script
     src="https://cdn.jsdelivr.net/npm/sweetalert2@11">
 </script>
 
+
 <style>
 
-body {
-    background: #f4f6f9;
+/* =========================================================
+   GLOBAL
+========================================================= */
+
+*{
+    box-sizing:border-box;
 }
 
-.main-content {
-    min-height: 100vh;
+
+body{
+
+    margin:0;
+
+    background:#f5f7fa;
+
+    color:#1f2937;
+
+    font-family:
+        'Segoe UI',
+        Arial,
+        sans-serif;
 }
 
-.box {
-    background: white;
-    padding: 24px;
-    border-radius: 18px;
-    box-shadow: 0 8px 25px rgba(0,0,0,0.07);
+
+/* =========================================================
+   MAIN
+========================================================= */
+
+.main-content{
+
+    flex:1;
+
+    min-width:0;
+
+    min-height:100vh;
+
+    padding:30px;
 }
 
-.badge {
-    padding: 7px 11px;
-    border-radius: 20px;
-    font-size: 12px;
-    white-space: nowrap;
+
+/* =========================================================
+   HEADER
+========================================================= */
+
+.page-header{
+
+    display:flex;
+
+    justify-content:space-between;
+
+    align-items:flex-start;
+
+    gap:20px;
+
+    margin-bottom:24px;
 }
 
-.table td {
-    vertical-align: middle;
+
+.page-title{
+
+    margin:0;
+
+    color:#111827;
+
+    font-size:30px;
+
+    font-weight:750;
 }
 
-.table th {
-    white-space: nowrap;
+
+.page-subtitle{
+
+    margin-top:6px;
+
+    color:#64748b;
+
+    font-size:14px;
 }
 
-.table thead th {
-    background: #212529;
-    color: white;
-    border: none;
+
+.pending-indicator{
+
+    display:flex;
+
+    align-items:center;
+
+    gap:8px;
+
+    padding:10px 14px;
+
+    background:#fff7ed;
+
+    border:1px solid #fed7aa;
+
+    border-radius:10px;
+
+    color:#c2410c;
+
+    font-size:13px;
+
+    font-weight:650;
 }
 
-.page-title {
-    color: #172033;
+
+/* =========================================================
+   ALERT
+========================================================= */
+
+.workflow-alert{
+
+    display:flex;
+
+    align-items:flex-start;
+
+    gap:10px;
+
+    margin-bottom:20px;
+
+    padding:14px 16px;
+
+    border-radius:10px;
+
+    font-size:13px;
+}
+
+
+.reminder-breakdown{
+
+    margin-top:5px;
+
+    color:#7c2d12;
+
+    font-size:12px;
+}
+
+
+/* =========================================================
+   CARD
+========================================================= */
+
+.preparation-card{
+
+    padding:22px;
+
+    background:#fff;
+
+    border:1px solid #e5e7eb;
+
+    border-radius:14px;
+
+    box-shadow:
+        0 3px 12px
+        rgba(15,23,42,.035);
+}
+
+
+.card-title-clean{
+
+    margin:0;
+
+    color:#1f2937;
+
+    font-size:18px;
+
+    font-weight:700;
+}
+
+
+.card-subtitle-clean{
+
+    margin-top:5px;
+
+    margin-bottom:18px;
+
+    color:#64748b;
+
+    font-size:13px;
+}
+
+
+/* =========================================================
+   DATE FILTER
+========================================================= */
+
+.date-record-box{
+
+    margin-bottom:20px;
+
+    padding:16px;
+
+    background:#f8fafc;
+
+    border:1px solid #dfe5ec;
+
+    border-radius:10px;
+}
+
+
+.date-record-title{
+
+    display:flex;
+
+    align-items:center;
+
+    gap:7px;
+
+    margin-bottom:14px;
+
+    color:#334155;
+
+    font-size:12px;
+
+    font-weight:700;
+}
+
+
+.date-record-title i{
+
+    color:#2563eb;
+}
+
+
+.date-filter-grid{
+
+    display:grid;
+
+    grid-template-columns:
+        minmax(240px,1fr)
+        258px
+        258px;
+
+    gap:8px;
+
+    align-items:end;
+}
+
+
+.date-action-btn{
+
+    min-height:44px;
+
+    display:flex;
+
+    align-items:center;
+
+    justify-content:center;
+
+    gap:7px;
+
+    border-radius:8px;
+
+    font-size:11px;
+
+    font-weight:650;
+}
+
+
+.date-today-btn{
+
+    border:1px solid #1d72f3;
+
+    background:#1d72f3;
+
+    color:#fff;
+}
+
+
+.date-today-btn:hover{
+
+    background:#155fd0;
+
+    color:#fff;
+}
+
+
+.date-clear-btn{
+
+    border:1px solid #64748b;
+
+    background:#fff;
+
+    color:#475569;
+}
+
+
+.date-clear-btn:hover{
+
+    background:#f8fafc;
+
+    color:#0f172a;
+}
+
+
+/* =========================================================
+   FILTER
+========================================================= */
+
+.filter-box{
+
+    margin-bottom:18px;
+
+    padding:15px;
+
+    background:#f8fafc;
+
+    border:1px solid #e5e7eb;
+
+    border-radius:10px;
+}
+
+
+.filter-label{
+
+    margin-bottom:7px;
+
+    color:#64748b;
+
+    font-size:11px;
+
+    font-weight:650;
+
+    letter-spacing:.3px;
+
+    text-transform:uppercase;
+}
+
+
+.search-wrapper{
+
+    position:relative;
+}
+
+
+.search-wrapper i{
+
+    position:absolute;
+
+    top:50%;
+
+    left:13px;
+
+    color:#94a3b8;
+
+    transform:translateY(-50%);
+}
+
+
+.search-wrapper input{
+
+    padding-left:38px;
+}
+
+
+.form-control,
+.form-select{
+
+    min-height:44px;
+
+    border:1px solid #dfe3e8;
+
+    border-radius:8px;
+
+    color:#374151;
+
+    font-size:13px;
+}
+
+
+.form-control:focus,
+.form-select:focus{
+
+    border-color:#93c5fd;
+
+    box-shadow:
+        0 0 0 3px
+        rgba(59,130,246,.07);
+}
+
+
+/* =========================================================
+   TABLE
+========================================================= */
+
+.table-responsive{
+
+    overflow-x:auto;
+
+    border:1px solid #edf0f3;
+
+    border-radius:10px;
+}
+
+
+.table{
+
+    width:100% !important;
+
+    margin-bottom:0 !important;
+
+    vertical-align:middle;
+}
+
+
+.table thead th{
+
+    padding:12px 10px !important;
+
+    background:#f8fafc !important;
+
+    border-bottom:1px solid #e5e7eb !important;
+
+    color:#64748b !important;
+
+    font-size:10px;
+
+    font-weight:700;
+
+    letter-spacing:.2px;
+
+    text-transform:uppercase;
+
+    white-space:nowrap;
+}
+
+
+.table tbody td{
+
+    padding:13px 10px !important;
+
+    border-color:#eef1f4 !important;
+
+    color:#374151;
+
+    font-size:12px;
+}
+
+
+.table tbody tr:hover td{
+
+    background:#fafbfc;
+}
+
+
+.number-cell{
+
+    width:45px;
+
+    text-align:center;
+
+    color:#64748b;
+
+    font-weight:650;
+}
+
+
+.patient-name,
+.medication-name{
+
+    color:#111827;
+
+    font-weight:650;
+}
+
+
+/* =========================================================
+   BADGES
+========================================================= */
+
+.status-badge{
+
+    display:inline-flex;
+
+    align-items:center;
+
+    gap:5px;
+
+    padding:6px 8px;
+
+    border-radius:6px;
+
+    font-size:10px;
+
+    font-weight:650;
+
+    white-space:nowrap;
+}
+
+
+.badge-admission{
+
+    background:#fff1f2;
+
+    color:#be123c;
+}
+
+
+.badge-appointment{
+
+    background:#eff6ff;
+
+    color:#2563eb;
+}
+
+
+.badge-walkin{
+
+    background:#fff7ed;
+
+    color:#c2410c;
+}
+
+
+.badge-discharge{
+
+    background:#f5f3ff;
+
+    color:#7c3aed;
+}
+
+
+.badge-nurse{
+
+    background:#ecfeff;
+
+    color:#0e7490;
+}
+
+
+.badge-patient{
+
+    background:#ecfdf5;
+
+    color:#15803d;
+}
+
+
+.badge-pending{
+
+    background:#fff7ed;
+
+    color:#c2410c;
+}
+
+
+.badge-ready{
+
+    background:#ecfdf5;
+
+    color:#15803d;
+}
+
+
+.badge-collected{
+
+    background:#eff6ff;
+
+    color:#2563eb;
+}
+
+
+.badge-administered{
+
+    background:#f3e8ff;
+
+    color:#7e22ce;
+}
+
+
+.badge-discharged{
+
+    background:#f1f5f9;
+
+    color:#475569;
+}
+
+
+.badge-unscheduled{
+
+    background:#fef3c7;
+
+    color:#92400e;
+}
+
+
+.badge-cancelled{
+
+    background:#f3f4f6;
+
+    color:#6b7280;
+}
+
+
+/* =========================================================
+   SCHEDULE
+========================================================= */
+
+.schedule-time{
+
+    color:#0f172a;
+
+    font-size:14px;
+
+    font-weight:700;
+}
+
+
+.schedule-date{
+
+    margin-top:3px;
+
+    color:#94a3b8;
+
+    font-size:10px;
+}
+
+
+.period-muted{
+
+    color:#94a3b8;
+
+    font-size:10px;
+}
+
+
+/* =========================================================
+   ACTION
+========================================================= */
+
+.action-btn{
+
+    min-height:33px;
+
+    display:inline-flex;
+
+    align-items:center;
+
+    gap:5px;
+
+    padding:0 10px;
+
+    border-radius:7px;
+
+    font-size:10px;
+
+    font-weight:650;
+
+    white-space:nowrap;
+}
+
+
+.btn-prepare{
+
+    border:0;
+
+    background:#16a34a;
+
+    color:#fff;
+}
+
+
+.btn-prepare:hover{
+
+    background:#15803d;
+
+    color:#fff;
+}
+
+
+.btn-collect{
+
+    border:0;
+
+    background:#2563eb;
+
+    color:#fff;
+}
+
+
+.btn-collect:hover{
+
+    background:#1d4ed8;
+
+    color:#fff;
+}
+
+
+.action-disabled{
+
+    background:#f3f4f6;
+
+    border:1px solid #e5e7eb;
+
+    color:#94a3b8;
+}
+
+
+/* =========================================================
+   TIME
+========================================================= */
+
+.due-now{
+
+    color:#dc2626;
+
+    font-size:10px;
+
+    font-weight:650;
+}
+
+
+.upcoming{
+
+    color:#2563eb;
+
+    font-size:10px;
+
+    font-weight:650;
+}
+
+
+.overdue{
+
+    color:#dc2626;
+
+    font-size:10px;
+
+    font-weight:650;
+}
+
+
+/* =========================================================
+   DATATABLE
+========================================================= */
+
+.dataTables_wrapper
+.dataTables_filter{
+
+    display:none;
+}
+
+
+.dataTables_wrapper
+.dataTables_length{
+
+    margin-bottom:12px;
+
+    color:#64748b;
+
+    font-size:11px;
+}
+
+
+.dataTables_wrapper
+.dataTables_info{
+
+    padding-top:15px !important;
+
+    color:#94a3b8 !important;
+
+    font-size:11px;
+}
+
+
+.dataTables_wrapper
+.dataTables_paginate{
+
+    padding-top:11px !important;
+}
+
+
+.page-link{
+
+    min-width:32px;
+
+    height:32px;
+
+    display:flex;
+
+    align-items:center;
+
+    justify-content:center;
+
+    border-radius:6px !important;
+
+    font-size:11px;
+}
+
+
+/* =========================================================
+   RESPONSIVE
+========================================================= */
+
+@media(max-width:1100px){
+
+    .date-filter-grid{
+
+        grid-template-columns:
+            1fr;
+    }
+}
+
+
+@media(max-width:900px){
+
+    .main-content{
+
+        padding:18px;
+    }
+
+
+    .page-header{
+
+        flex-direction:column;
+    }
 }
 
 </style>
 
 </head>
 
+
 <body>
+
 
 <div class="d-flex">
 
-<?php include("../includes/sidebar_pharma.php"); ?>
 
-<div class="main-content p-4 w-100">
+<?php
+include(
+    "../includes/sidebar_pharma.php"
+);
+?>
 
-<!-- =========================================================
+
+<div class="main-content">
+
+
+<!-- =====================================================
      HEADER
-========================================================= -->
+===================================================== -->
 
-<div class="d-flex justify-content-between align-items-center mb-4">
+<div class="page-header">
+
 
 <div>
 
-<h3 class="fw-bold mb-0 page-title">
-💊 Prepare Medication
-</h3>
 
-<small class="text-muted">
-Manage medication preparation and pickup workflow
-</small>
+<h1 class="page-title">
 
-</div>
+Prepare Medication
 
-<div>
+</h1>
 
-<span class="badge bg-warning text-dark fs-6 p-2">
-Pending: <?= $pendingCount ?>
-</span>
 
-</div>
+<div class="page-subtitle">
+
+Manage inpatient scheduled doses, appointment and walk-in prescriptions, and discharge medication for patient pickup.
 
 </div>
 
 
-<!-- =========================================================
+</div>
+
+
+<div class="pending-indicator">
+
+<i class="bi bi-hourglass-split"></i>
+
+Pending:
+
+<strong>
+
+<?= $pendingCount ?>
+
+</strong>
+
+</div>
+
+
+</div>
+
+
+<!-- =====================================================
      ALERT
-========================================================= -->
+===================================================== -->
 
-<?php if ($pendingCount > 0): ?>
+<?php if (
+    $pendingCount > 0
+): ?>
 
-<div class="alert alert-warning">
 
-🔔
+<div class="alert alert-warning workflow-alert">
 
-<strong><?= $pendingCount ?></strong>
 
-medication(s) require preparation today.
+<i class="bi bi-bell-fill"></i>
+
+
+<div>
+
+
+<strong>
+
+<?= $pendingCount ?>
+
+dose(s) / medication(s) require preparation.
+
+</strong>
+
+
+<div class="reminder-breakdown">
+
+Admission doses today:
+<?= $pendingAdmission ?>
+
+&nbsp;•&nbsp;
+
+Appointment / Walk-In:
+<?= $pendingOutpatient ?>
+
+&nbsp;•&nbsp;
+
+Discharge Medication:
+<?= $pendingDischarge ?>
 
 </div>
+
+
+</div>
+
+
+</div>
+
 
 <?php else: ?>
 
-<div class="alert alert-success">
 
-✅
+<div class="alert alert-success workflow-alert">
 
-No medication currently requires preparation today.
+
+<i class="bi bi-check-circle"></i>
+
+
+<div>
+
+All medication preparation tasks are completed.
 
 </div>
+
+
+</div>
+
 
 <?php endif; ?>
 
 
-<!-- =========================================================
-     TABLE
-========================================================= -->
+<!-- =====================================================
+     CARD
+===================================================== -->
 
-<div class="box">
+<div class="preparation-card">
 
-<div class="row mb-3">
 
-<div class="col-md-4">
+<h5 class="card-title-clean">
+
+Medication Preparation Queue
+
+</h5>
+
+
+<div class="card-subtitle-clean">
+
+Admission medication, historical schedules, appointment prescriptions, walk-in prescriptions and discharge medication are displayed below.
+
+</div>
+
+
+<!-- =====================================================
+     DATE FILTER
+===================================================== -->
+
+<div class="date-record-box">
+
+
+<div class="date-record-title">
+
+<i class="bi bi-calendar3"></i>
+
+View Medication Records by Date
+
+</div>
+
+
+<div class="date-filter-grid">
+
+
+<div>
+
+
+<div class="filter-label">
+
+Select Date
+
+</div>
+
+
+<input
+    type="date"
+    id="recordDateFilter"
+    class="form-control"
+    value="<?= h(
+        $currentRecordDate
+    ) ?>"
+>
+
+
+</div>
+
+
+<button
+    type="button"
+    id="todayDateBtn"
+    class="
+        btn
+        date-action-btn
+        date-today-btn
+    "
+>
+
+<i class="bi bi-calendar2-check"></i>
+
+Today
+
+</button>
+
+
+<button
+    type="button"
+    id="clearDateBtn"
+    class="
+        btn
+        date-action-btn
+        date-clear-btn
+    "
+>
+
+<i class="bi bi-arrow-counterclockwise"></i>
+
+Clear
+
+</button>
+
+
+</div>
+
+
+</div>
+
+
+<!-- =====================================================
+     OTHER FILTER
+===================================================== -->
+
+<div class="filter-box">
+
+
+<div class="row g-2">
+
+
+<div class="col-lg-5">
+
+
+<div class="filter-label">
+
+Search
+
+</div>
+
+
+<div class="search-wrapper">
+
+
+<i class="bi bi-search"></i>
+
 
 <input
     type="text"
     id="searchInput"
     class="form-control"
-    placeholder="🔍 Search patient or medication"
-    value="<?= htmlspecialchars($currentSearch) ?>"
+    placeholder="Search patient, medication or time..."
+    value="<?= h(
+        $currentSearch
+    ) ?>"
 >
+
 
 </div>
 
 
-<div class="col-md-3">
+</div>
+
+
+<div class="col-lg-4">
+
+
+<div class="filter-label">
+
+Order Type
+
+</div>
+
 
 <select
     id="typeFilter"
     class="form-select"
 >
 
+
 <option value="">
+
 All Types
+
 </option>
 
-<option
-    value="Walk-In"
-    <?= $currentType === 'Walk-In' ? 'selected' : '' ?>
->
-Walk-In
-</option>
-
-<option
-    value="Appointment"
-    <?= $currentType === 'Appointment' ? 'selected' : '' ?>
->
-Appointment
-</option>
 
 <option
     value="Admission"
-    <?= $currentType === 'Admission' ? 'selected' : '' ?>
+    <?= $currentType === 'Admission'
+        ? 'selected'
+        : '' ?>
 >
+
 Admission
+
 </option>
 
+
+<option
+    value="Appointment"
+    <?= $currentType === 'Appointment'
+        ? 'selected'
+        : '' ?>
+>
+
+Appointment
+
+</option>
+
+
+<option
+    value="Walk-In"
+    <?= $currentType === 'Walk-In'
+        ? 'selected'
+        : '' ?>
+>
+
+Walk-In
+
+</option>
+
+
+<option
+    value="Discharge"
+    <?= $currentType === 'Discharge'
+        ? 'selected'
+        : '' ?>
+>
+
+Discharge
+
+</option>
+
+
 </select>
+
 
 </div>
 
 
-<div class="col-md-3">
+<div class="col-lg-3">
+
+
+<div class="filter-label">
+
+Sort
+
+</div>
+
 
 <select
     id="sortFilter"
     class="form-select"
 >
 
-<option
-    value="desc"
-    <?= $currentSort === 'desc' ? 'selected' : '' ?>
->
-Newest First
-</option>
 
 <option
     value="asc"
-    <?= $currentSort === 'asc' ? 'selected' : '' ?>
+    <?= $currentSort === 'asc'
+        ? 'selected'
+        : '' ?>
 >
-Oldest First
+
+Earliest First
+
 </option>
+
+
+<option
+    value="desc"
+    <?= $currentSort === 'desc'
+        ? 'selected'
+        : '' ?>
+>
+
+Latest First
+
+</option>
+
 
 </select>
 
-</div>
 
 </div>
 
+
+</div>
+
+
+</div>
+
+
+<!-- =====================================================
+     TABLE
+===================================================== -->
 
 <div class="table-responsive">
 
+
 <table
     id="medicationTable"
-    class="table table-hover align-middle"
+    class="table"
 >
+
 
 <thead>
 
+
 <tr>
 
-<th>ID</th>
+<th>No.</th>
 
 <th>Patient</th>
 
@@ -1025,721 +3495,2060 @@ Oldest First
 
 <th>Frequency</th>
 
-<th>Medication Period</th>
+<th>Scheduled</th>
 
 <th>Status</th>
 
 <th>Action</th>
 
+<th>Sort Key</th>
+
 </tr>
+
 
 </thead>
 
+
 <tbody>
 
-<?php foreach ($orders as $row): ?>
+
+<?php foreach (
+    $orders
+    as
+    $row
+): ?>
+
 
 <?php
 
-/* ============================================================
-   DETERMINE STATUS
-============================================================ */
 
-if ($row['ORDER_TYPE'] === 'Admission') {
+$isAdmission =
+    (int)(
+        $row[
+            'IS_ADMISSION'
+        ]
+        ?? 0
+    )
+    === 1;
+
+
+$hasSchedule =
+    (int)(
+        $row[
+            'HAS_SCHEDULE'
+        ]
+        ?? 0
+    )
+    === 1;
+
+
+$isDischarged =
+    $isAdmission
+    &&
+    !empty(
+        $row[
+            'DISCHARGE_DATE'
+        ]
+    );
+
+
+$orderType =
+    $row[
+        'DISPLAY_ORDER_TYPE'
+    ]
+    ?? 'Unknown';
+
+
+$isDischargeMedication =
+    $orderType
+    ===
+    'Discharge';
+
+
+$recordDate =
+    $row[
+        'FILTER_DATE_VALUE'
+    ]
+    ?? '';
+
+
+$isTodaySchedule =
+    $isAdmission
+    &&
+    $hasSchedule
+    &&
+    !empty(
+        $row[
+            'SCHEDULE_DATE_VALUE'
+        ]
+    )
+    &&
+    $row[
+        'SCHEDULE_DATE_VALUE'
+    ]
+    ===
+    date('Y-m-d');
+
+
+$scheduleStatusUpper =
+    strtoupper(
+        trim(
+            (string)(
+                $row[
+                    'SCHEDULE_STATUS'
+                ]
+                ?? ''
+            )
+        )
+    );
+
+
+$prepStatusUpper =
+    strtoupper(
+        trim(
+            (string)(
+                $row[
+                    'PREPARATION_STATUS'
+                ]
+                ?? ''
+            )
+        )
+    );
+
+
+/* =========================================================
+   DISPLAY STATUS
+========================================================= */
+
+if (
+    $isAdmission
+    &&
+    !$hasSchedule
+) {
+
+    $displayStatus =
+        'Not Scheduled';
+
+}
+elseif (
+    $isAdmission
+    &&
+    in_array(
+        $scheduleStatusUpper,
+        [
+            'CANCELLED',
+            'CANCELLED - DISCHARGED'
+        ],
+        true
+    )
+) {
+
+    $displayStatus =
+        'Cancelled - Discharged';
+
+}
+elseif ($isAdmission) {
 
     if (
-        empty($row['DISCHARGE_DATE']) &&
-        (
-            empty($row['TODAY_STATUS']) ||
-            $row['TODAY_STATUS'] === null
+        $prepStatusUpper !== ''
+    ) {
+
+        if (
+            $prepStatusUpper ===
+            'COLLECTED'
+        ) {
+
+            $displayStatus =
+                'Collected By Nurse';
+
+        }
+        else {
+
+            $displayStatus =
+                $row[
+                    'PREPARATION_STATUS'
+                ];
+        }
+
+    }
+    elseif (
+        in_array(
+            $scheduleStatusUpper,
+            [
+                'ADMINISTERED',
+                'GIVEN',
+                'DELIVERED',
+                'COMPLETED'
+            ],
+            true
         )
     ) {
 
-        /*
-           No preparation today.
+        $displayStatus =
+            'Administered';
 
-           Therefore:
-           PENDING
-        */
-
-        $displayStatus = 'Pending';
-
-    } else {
-
-        /*
-           Today's preparation exists.
-        */
+    }
+    elseif (
+        $scheduleStatusUpper ===
+        'COLLECTED BY NURSE'
+    ) {
 
         $displayStatus =
-            $row['TODAY_STATUS'] ?? 'Pending';
+            'Collected By Nurse';
+
+    }
+    else {
+
+        $displayStatus =
+            'Pending Preparation';
     }
 
-} else {
-
-    /*
-       Appointment / Walk-In
-    */
+}
+else {
 
     $displayStatus =
-        $row['LATEST_STATUS'] ?? 'Pending';
+        $row[
+            'PREPARATION_STATUS'
+        ]
+        ??
+        'Pending Preparation';
 }
 
 
-/* ============================================================
-   CHECK WHETHER ADMISSION IS ACTIVE TODAY
-============================================================ */
-
-$admissionActiveToday = true;
-
-if ($row['ORDER_TYPE'] === 'Admission') {
-
-    if (!empty($row['DISCHARGE_DATE'])) {
-
-        $admissionActiveToday = false;
-
-    }
-
-}
-
-?>
-
-<tr>
-
-<!-- ID -->
-
-<td>
-<?= htmlspecialchars($row['MEDORDER_ID']) ?>
-</td>
-
-
-<!-- PATIENT -->
-
-<td>
-
-<strong>
-<?= htmlspecialchars(
-    $row['PATIENT_NAME'] ?? 'Unknown Patient'
-) ?>
-</strong>
-
-</td>
-
-
-<!-- TYPE -->
-
-<td>
-
-<?php if ($row['ORDER_TYPE'] === 'Appointment'): ?>
-
-<span class="badge bg-primary">
-Appointment
-</span>
-
-<?php elseif ($row['ORDER_TYPE'] === 'Admission'): ?>
-
-<span class="badge bg-danger">
-Admission
-</span>
-
-<?php elseif ($row['ORDER_TYPE'] === 'Walk-In'): ?>
-
-<span class="badge bg-warning text-dark">
-Walk-In
-</span>
-
-<?php else: ?>
-
-<span class="badge bg-secondary">
-Unknown
-</span>
-
-<?php endif; ?>
-
-</td>
-
-
-<!-- COLLECTION -->
-
-<td>
-
-<?php if (
-    $row['COLLECTION_METHOD'] === 'Nurse Pickup'
-): ?>
-
-<span class="badge bg-info">
-Nurse Pickup
-</span>
-
-<?php else: ?>
-
-<span class="badge bg-success">
-Patient Pickup
-</span>
-
-<?php endif; ?>
-
-</td>
-
-
-<!-- LOCATION -->
-
-<td>
-
-<?= htmlspecialchars(
-    $row['WARD_NAME'] ?? '-'
-) ?>
-
-<?php if (
-    $row['BED_NUMBER'] !== '-'
-): ?>
-
-<br>
-
-<small class="text-muted">
-
-Bed
-<?= htmlspecialchars(
-    $row['BED_NUMBER']
-) ?>
-
-</small>
-
-<?php endif; ?>
-
-</td>
-
-
-<!-- MEDICATION -->
-
-<td>
-
-<?= htmlspecialchars(
-    $row['MEDICATION_NAME']
-) ?>
-
-</td>
-
-
-<!-- DOSAGE -->
-
-<td>
-
-<?= htmlspecialchars(
-    $row['DOSAGE'] ?? '-'
-) ?>
-
-</td>
-
-
-<!-- FREQUENCY -->
-
-<td>
-
-<?= htmlspecialchars(
-    $row['FREQUENCY'] ?? '-'
-) ?>
-
-</td>
-
-
-<!-- MEDICATION PERIOD -->
-
-<td>
-
-<?php if (
-    $row['ORDER_TYPE'] === 'Admission'
-): ?>
-
-<?php
-
-$startDate =
-    !empty($row['MED_START_DATE'])
-        ? date(
-            'd-M-Y',
-            strtotime($row['MED_START_DATE'])
-        )
-        : '-';
-
-$endDate =
-    !empty($row['MED_END_DATE'])
-        ? date(
-            'd-M-Y',
-            strtotime($row['MED_END_DATE'])
-        )
-        : (
-            !empty($row['EXPECTED_DISCHARGE_DATE'])
-                ? date(
-                    'd-M-Y',
-                    strtotime($row['EXPECTED_DISCHARGE_DATE'])
-                )
-                : '-'
+/* =========================================================
+   TIME INDICATOR
+========================================================= */
+
+$timeIndicator =
+    '';
+
+
+if (
+    $isAdmission
+    &&
+    $hasSchedule
+    &&
+    $isTodaySchedule
+    &&
+    !$isDischarged
+    &&
+    $displayStatus ===
+        'Pending Preparation'
+    &&
+    !empty(
+        $row[
+            'SCHEDULE_TIME'
+        ]
+    )
+    &&
+    $row[
+        'SCHEDULE_TIME'
+    ]
+    !== '-'
+) {
+
+    $nowHm =
+        date('H:i');
+
+
+    $scheduleHm =
+        substr(
+            $row[
+                'SCHEDULE_TIME'
+            ],
+            0,
+            5
         );
 
+
+    $currentTs =
+        strtotime(
+            date('Y-m-d')
+            .
+            ' '
+            .
+            $nowHm
+        );
+
+
+    $scheduledTs =
+        strtotime(
+            date('Y-m-d')
+            .
+            ' '
+            .
+            $scheduleHm
+        );
+
+
+    $differenceMinutes =
+        (
+            $scheduledTs
+            -
+            $currentTs
+        )
+        /
+        60;
+
+
+    if (
+        abs(
+            $differenceMinutes
+        )
+        <= 30
+    ) {
+
+        $timeIndicator =
+            'Due Now';
+
+    }
+    elseif (
+        $differenceMinutes
+        > 30
+    ) {
+
+        $timeIndicator =
+            'Upcoming';
+
+    }
+    else {
+
+        $timeIndicator =
+            'Overdue';
+    }
+}
+
 ?>
 
-<small>
 
-<?= htmlspecialchars($startDate) ?>
+<tr
 
-<br>
+    data-order-type="<?= h(
+        $orderType
+    ) ?>"
 
-<span class="text-muted">
-to
-</span>
+    data-record-date="<?= h(
+        $recordDate
+    ) ?>"
 
-<br>
-
-<?= htmlspecialchars($endDate) ?>
-
-</small>
-
-<?php else: ?>
-
-<span class="text-muted">
-One-time
-</span>
-
-<?php endif; ?>
-
-</td>
+>
 
 
-<!-- STATUS -->
+<!-- =====================================================
+     NO
+===================================================== -->
+
+<td class="number-cell"></td>
+
+
+<!-- =====================================================
+     PATIENT
+===================================================== -->
 
 <td>
 
-<?php if ($displayStatus === 'Pending'): ?>
 
-<span class="badge bg-warning text-dark">
-Pending
+<span class="patient-name">
+
+<?= h(
+    $row[
+        'PATIENT_NAME'
+    ]
+    ??
+    'Unknown Patient'
+) ?>
+
 </span>
 
-<?php elseif (
-    $displayStatus === 'Ready For Pickup'
-): ?>
-
-<span class="badge bg-success">
-Ready For Pickup
-</span>
-
-<?php elseif (
-    $displayStatus === 'Ready For Nurse Pickup'
-): ?>
-
-<span class="badge bg-info">
-Ready For Nurse Pickup
-</span>
-
-<?php elseif (
-    $displayStatus === 'Collected'
-): ?>
-
-<span class="badge bg-primary">
-Collected
-</span>
-
-<?php else: ?>
-
-<span class="badge bg-secondary">
-<?= htmlspecialchars($displayStatus) ?>
-</span>
-
-<?php endif; ?>
-
-</td>
-
-
-<!-- ACTION -->
-
-<td>
 
 <?php if (
-    $displayStatus === 'Pending' &&
-    $admissionActiveToday
+    $isDischarged
 ): ?>
 
+
+<div class="mt-1">
+
+<span class="status-badge badge-discharged">
+
+<i class="bi bi-box-arrow-right"></i>
+
+Discharged
+
+</span>
+
+</div>
+
+
+<?php endif; ?>
+
+
+</td>
+
+
+<!-- =====================================================
+     TYPE
+===================================================== -->
+
+<td>
+
+
+<?php if (
+    $orderType ===
+    'Admission'
+): ?>
+
+
+<span class="status-badge badge-admission">
+
+<i class="bi bi-hospital"></i>
+
+Admission
+
+</span>
+
+
+<?php elseif (
+    $orderType ===
+    'Appointment'
+): ?>
+
+
+<span class="status-badge badge-appointment">
+
+<i class="bi bi-calendar-event"></i>
+
+Appointment
+
+</span>
+
+
+<?php elseif (
+    $orderType ===
+    'Walk-In'
+): ?>
+
+
+<span class="status-badge badge-walkin">
+
+<i class="bi bi-person-walking"></i>
+
+Walk-In
+
+</span>
+
+
+<?php elseif (
+    $orderType ===
+    'Discharge'
+): ?>
+
+
+<span class="status-badge badge-discharge">
+
+<i class="bi bi-house-check"></i>
+
+Discharge
+
+</span>
+
+
+<?php else: ?>
+
+
+<span class="status-badge">
+
+Unknown
+
+</span>
+
+
+<?php endif; ?>
+
+
+</td>
+
+
+<!-- =====================================================
+     COLLECTION
+===================================================== -->
+
+<td>
+
+
+<?php if (
+    $isAdmission
+): ?>
+
+
+<span class="status-badge badge-nurse">
+
+<i class="bi bi-person-badge"></i>
+
+Nurse Pickup
+
+</span>
+
+
+<?php else: ?>
+
+
+<span class="status-badge badge-patient">
+
+<i class="bi bi-person-check"></i>
+
+Patient Pickup
+
+</span>
+
+
+<?php endif; ?>
+
+
+</td>
+
+
+<!-- =====================================================
+     LOCATION
+===================================================== -->
+
+<td>
+
+
+<?= h(
+    $row[
+        'WARD_NAME'
+    ]
+    ?? '-'
+) ?>
+
+
+<?php if (
+    !empty(
+        $row[
+            'BED_NUMBER'
+        ]
+    )
+    &&
+    $row[
+        'BED_NUMBER'
+    ]
+    !== '-'
+): ?>
+
+
+<div class="period-muted">
+
+Bed
+<?= h(
+    $row[
+        'BED_NUMBER'
+    ]
+) ?>
+
+</div>
+
+
+<?php endif; ?>
+
+
+<?php if (
+    $isDischarged
+): ?>
+
+
+<div class="period-muted mt-1">
+
+<i class="bi bi-clock-history"></i>
+
+Past Admission
+
+</div>
+
+
+<?php elseif (
+    $isDischargeMedication
+): ?>
+
+
+<div class="period-muted mt-1">
+
+<i class="bi bi-house-check"></i>
+
+Take-home Medication
+
+</div>
+
+
+<?php endif; ?>
+
+
+</td>
+
+
+<!-- =====================================================
+     MEDICATION
+===================================================== -->
+
+<td>
+
+
+<span class="medication-name">
+
+<?= h(
+    $row[
+        'MEDICATION_NAME'
+    ]
+) ?>
+
+</span>
+
+
+</td>
+
+
+<!-- =====================================================
+     DOSAGE
+===================================================== -->
+
+<td>
+
+
+<?= h(
+    $row[
+        'DOSAGE'
+    ]
+    ?? '-'
+) ?>
+
+
+</td>
+
+
+<!-- =====================================================
+     FREQUENCY
+===================================================== -->
+
+<td>
+
+
+<?= h(
+    $row[
+        'FREQUENCY'
+    ]
+    ?? '-'
+) ?>
+
+
+</td>
+
+
+<!-- =====================================================
+     SCHEDULE
+===================================================== -->
+
+<td>
+
+
+<?php if (
+    $isAdmission
+    &&
+    !$hasSchedule
+): ?>
+
+
+<span class="status-badge badge-unscheduled">
+
+<i class="bi bi-calendar-x"></i>
+
+Not Scheduled
+
+</span>
+
+
+<?php elseif (
+    $isAdmission
+): ?>
+
+
+<div class="schedule-time">
+
+<?= h(
+    $row[
+        'SCHEDULE_TIME'
+    ]
+    ?? '-'
+) ?>
+
+</div>
+
+
+<div class="schedule-date">
+
+<?= h(
+    $row[
+        'SCHEDULE_DATE_DISPLAY'
+    ]
+    ?? '-'
+) ?>
+
+</div>
+
+
+<?php if (
+    $displayStatus
+    ===
+    'Pending Preparation'
+    &&
+    $isTodaySchedule
+    &&
+    !$isDischarged
+): ?>
+
+
+<?php if (
+    $timeIndicator
+    ===
+    'Due Now'
+): ?>
+
+
+<div class="due-now mt-1">
+
+<i class="bi bi-clock-fill"></i>
+
+Due Now
+
+</div>
+
+
+<?php elseif (
+    $timeIndicator
+    ===
+    'Overdue'
+): ?>
+
+
+<div class="overdue mt-1">
+
+<i class="bi bi-exclamation-circle"></i>
+
+Overdue
+
+</div>
+
+
+<?php else: ?>
+
+
+<div class="upcoming mt-1">
+
+<i class="bi bi-clock"></i>
+
+Upcoming
+
+</div>
+
+
+<?php endif; ?>
+
+
+<?php elseif (
+    $isDischarged
+): ?>
+
+
+<div class="period-muted mt-1">
+
+Historical record
+
+</div>
+
+
+<?php elseif (
+    $displayStatus
+    ===
+    'Cancelled - Discharged'
+): ?>
+
+
+<div class="period-muted mt-1">
+
+Cancelled after discharge
+
+</div>
+
+
+<?php elseif (
+    $displayStatus
+    ===
+    'Pending Preparation'
+    &&
+    !$isTodaySchedule
+): ?>
+
+
+<div class="period-muted mt-1">
+
+Scheduled record
+
+</div>
+
+
+<?php endif; ?>
+
+
+<?php else: ?>
+
+
+<span class="period-muted">
+
+<?= $isDischargeMedication
+    ?
+    'Take-home prescription'
+    :
+    'One-time prescription'
+?>
+
+</span>
+
+
+<?php endif; ?>
+
+
+</td>
+
+
+<!-- =====================================================
+     STATUS
+===================================================== -->
+
+<td>
+
+
+<?php if (
+    $displayStatus
+    ===
+    'Not Scheduled'
+): ?>
+
+
+<span class="status-badge badge-unscheduled">
+
+<i class="bi bi-calendar-x"></i>
+
+Not Scheduled
+
+</span>
+
+
+<?php elseif (
+    $displayStatus
+    ===
+    'Pending Preparation'
+): ?>
+
+
+<span class="status-badge badge-pending">
+
+<i class="bi bi-hourglass-split"></i>
+
+Pending
+
+</span>
+
+
+<?php elseif (
+    $displayStatus
+    ===
+    'Ready For Nurse Pickup'
+): ?>
+
+
+<span class="status-badge badge-ready">
+
+<i class="bi bi-check-circle"></i>
+
+Ready For Nurse
+
+</span>
+
+
+<?php elseif (
+    $displayStatus
+    ===
+    'Ready For Pickup'
+): ?>
+
+
+<span class="status-badge badge-ready">
+
+<i class="bi bi-check-circle"></i>
+
+Ready For Pickup
+
+</span>
+
+
+<?php elseif (
+    $displayStatus
+    ===
+    'Collected'
+): ?>
+
+
+<span class="status-badge badge-collected">
+
+<i class="bi bi-check2-all"></i>
+
+Collected
+
+</span>
+
+
+<?php elseif (
+    $displayStatus
+    ===
+    'Collected By Nurse'
+): ?>
+
+
+<span class="status-badge badge-collected">
+
+<i class="bi bi-person-check"></i>
+
+Collected By Nurse
+
+</span>
+
+
+<?php elseif (
+    $displayStatus
+    ===
+    'Administered'
+): ?>
+
+
+<span class="status-badge badge-administered">
+
+<i class="bi bi-check2-circle"></i>
+
+Administered
+
+</span>
+
+
+<?php elseif (
+    $displayStatus
+    ===
+    'Cancelled - Discharged'
+): ?>
+
+
+<span class="status-badge badge-cancelled">
+
+<i class="bi bi-x-circle"></i>
+
+Cancelled - Discharged
+
+</span>
+
+
+<?php else: ?>
+
+
+<span class="status-badge">
+
+<?= h(
+    $displayStatus
+) ?>
+
+</span>
+
+
+<?php endif; ?>
+
+
+</td>
+
+
+<!-- =====================================================
+     ACTION
+===================================================== -->
+
+<td>
+
+
+<?php if (
+    $isAdmission
+    &&
+    $displayStatus
+    ===
+    'Cancelled - Discharged'
+): ?>
+
+
+<span class="action-btn action-disabled">
+
+<i class="bi bi-x-circle"></i>
+
+Cancelled
+
+</span>
+
+
+<?php elseif (
+    $isAdmission
+    &&
+    $isDischarged
+): ?>
+
+
+<span class="action-btn action-disabled">
+
+<i class="bi bi-clock-history"></i>
+
+History
+
+</span>
+
+
+<?php elseif (
+    $isAdmission
+    &&
+    !$hasSchedule
+): ?>
+
+
+<span class="action-btn action-disabled">
+
+<i class="bi bi-calendar-x"></i>
+
+Waiting Schedule
+
+</span>
+
+
+<?php elseif (
+    $isAdmission
+    &&
+    $displayStatus
+    ===
+    'Pending Preparation'
+    &&
+    $isTodaySchedule
+): ?>
+
+
 <a
-    href="?prepare=<?= urlencode(
-        $row['MEDORDER_ID']
-    ) ?>&type=<?= urlencode($currentType) ?>&search=<?= urlencode($currentSearch) ?>&sort=<?= urlencode($currentSort) ?>"
-    class="btn btn-success btn-sm prepareBtn"
+    href="?prepare_schedule=<?= urlencode(
+        $row[
+            'SCHEDULE_ID'
+        ]
+    ) ?>&type=<?= urlencode(
+        $currentType
+    ) ?>&search=<?= urlencode(
+        $currentSearch
+    ) ?>&sort=<?= urlencode(
+        $currentSort
+    ) ?>&record_date=<?= urlencode(
+        $currentRecordDate
+    ) ?>"
+    class="
+        action-btn
+        btn-prepare
+        text-decoration-none
+        prepareBtn
+    "
 >
+
+
+<i class="bi bi-box-seam"></i>
+
+Prepare Dose
+
+
+</a>
+
+
+<?php elseif (
+    $isAdmission
+    &&
+    $displayStatus
+    ===
+    'Pending Preparation'
+    &&
+    !$isTodaySchedule
+): ?>
+
+
+<span class="action-btn action-disabled">
+
+<i class="bi bi-eye"></i>
+
+View Only
+
+</span>
+
+
+<?php elseif (
+    !$isAdmission
+    &&
+    $displayStatus
+    ===
+    'Pending Preparation'
+): ?>
+
+
+<a
+    href="?prepare_order=<?= urlencode(
+        $row[
+            'MEDORDER_ID'
+        ]
+    ) ?>&type=<?= urlencode(
+        $currentType
+    ) ?>&search=<?= urlencode(
+        $currentSearch
+    ) ?>&sort=<?= urlencode(
+        $currentSort
+    ) ?>&record_date=<?= urlencode(
+        $currentRecordDate
+    ) ?>"
+    class="
+        action-btn
+        btn-prepare
+        text-decoration-none
+        prepareBtn
+    "
+>
+
 
 <i class="bi bi-box-seam"></i>
 
 Prepare
 
+
 </a>
 
+
 <?php elseif (
-    $displayStatus === 'Ready For Pickup'
+    !$isAdmission
+    &&
+    $displayStatus
+    ===
+    'Ready For Pickup'
 ): ?>
+
 
 <a
     href="?collect=<?= urlencode(
-        $row['MEDORDER_ID']
-    ) ?>&type=<?= urlencode($currentType) ?>&search=<?= urlencode($currentSearch) ?>&sort=<?= urlencode($currentSort) ?>"
-    class="btn btn-primary btn-sm collectBtn"
+        $row[
+            'MEDORDER_ID'
+        ]
+    ) ?>&type=<?= urlencode(
+        $currentType
+    ) ?>&search=<?= urlencode(
+        $currentSearch
+    ) ?>&sort=<?= urlencode(
+        $currentSort
+    ) ?>&record_date=<?= urlencode(
+        $currentRecordDate
+    ) ?>"
+    class="
+        action-btn
+        btn-collect
+        text-decoration-none
+        collectBtn
+    "
 >
+
 
 <i class="bi bi-check-circle"></i>
 
 Collected
 
+
 </a>
 
+
 <?php elseif (
-    $displayStatus === 'Ready For Nurse Pickup'
+    $isAdmission
+    &&
+    $displayStatus
+    ===
+    'Ready For Nurse Pickup'
 ): ?>
 
-<button
-    type="button"
-    class="btn btn-info btn-sm"
-    disabled
->
 
-<i class="bi bi-person-walking"></i>
+<span class="action-btn action-disabled">
+
+<i class="bi bi-hourglass"></i>
 
 Waiting Nurse
 
-</button>
+</span>
+
 
 <?php elseif (
-    $displayStatus === 'Collected'
+    $isAdmission
+    &&
+    $displayStatus
+    ===
+    'Collected By Nurse'
 ): ?>
 
-<button
-    type="button"
-    class="btn btn-secondary btn-sm"
-    disabled
->
+
+<span class="action-btn action-disabled">
+
+<i class="bi bi-person-check"></i>
+
+With Nurse
+
+</span>
+
+
+<?php elseif (
+    $displayStatus
+    ===
+    'Administered'
+): ?>
+
+
+<span class="action-btn action-disabled">
+
+<i class="bi bi-check2-circle"></i>
+
+Completed
+
+</span>
+
+
+<?php elseif (
+    $displayStatus
+    ===
+    'Collected'
+): ?>
+
+
+<span class="action-btn action-disabled">
 
 <i class="bi bi-check2-all"></i>
 
 Completed
 
-</button>
+</span>
+
 
 <?php else: ?>
 
-<button
-    type="button"
-    class="btn btn-secondary btn-sm"
-    disabled
->
+
+<span class="action-btn action-disabled">
 
 No Action
 
-</button>
+</span>
+
 
 <?php endif; ?>
 
+
 </td>
+
+
+<!-- =====================================================
+     HIDDEN SORT KEY
+===================================================== -->
+
+<td>
+
+<?= h(
+    $row[
+        'SORT_KEY'
+    ]
+) ?>
+
+</td>
+
 
 </tr>
 
+
 <?php endforeach; ?>
+
 
 </tbody>
 
+
 </table>
 
-</div>
 
 </div>
 
+
 </div>
+
+
+</div>
+
 
 </div>
 
 
 <script
-src="https://code.jquery.com/jquery-3.7.1.min.js">
+    src="https://code.jquery.com/jquery-3.7.1.min.js">
 </script>
 
-<script
-src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js">
-</script>
 
 <script
-src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js">
+    src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js">
+</script>
+
+
+<script
+    src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js">
+</script>
+
+
+<script
+    src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js">
 </script>
 
 
 <script>
 
-$(document).ready(function () {
 
-    const table = $('#medicationTable').DataTable({
-
-        pageLength: 10,
-
-        lengthMenu: [
-            [10, 25, 50, 100],
-            [10, 25, 50, 100]
-        ],
-
-        order: [
-            [0, '<?= $currentSort ?>']
-        ],
-
-        searching: true,
-
-        info: true,
-
-        paging: true
-
-    });
+$(document).ready(
+function()
+{
 
 
-    /* ==========================================================
+    let selectedOrderType =
+        $('#typeFilter')
+            .val()
+        ||
+        '';
+
+
+    let selectedRecordDate =
+        $('#recordDateFilter')
+            .val()
+        ||
+        '';
+
+
+    /* =====================================================
+       CUSTOM TYPE + DATE FILTER
+    ===================================================== */
+
+    $.fn.dataTable.ext.search.push(
+        function(
+            settings,
+            data,
+            dataIndex
+        )
+        {
+
+            if (
+                settings.nTable.id
+                !==
+                'medicationTable'
+            ) {
+
+                return true;
+            }
+
+
+            const row =
+                settings
+                    .aoData[
+                        dataIndex
+                    ]
+                    .nTr;
+
+
+            if (!row) {
+
+                return true;
+            }
+
+
+            const rowType =
+                row.getAttribute(
+                    'data-order-type'
+                )
+                ||
+                '';
+
+
+            const rowRecordDate =
+                row.getAttribute(
+                    'data-record-date'
+                )
+                ||
+                '';
+
+
+            if (
+                selectedOrderType
+                !== ''
+                &&
+                rowType
+                !==
+                selectedOrderType
+            ) {
+
+                return false;
+            }
+
+
+            if (
+                selectedRecordDate
+                !== ''
+                &&
+                rowRecordDate
+                !==
+                selectedRecordDate
+            ) {
+
+                return false;
+            }
+
+
+            return true;
+        }
+    );
+
+
+    /* =====================================================
+       DATATABLE
+    ===================================================== */
+
+    const table =
+        $('#medicationTable')
+            .DataTable({
+
+                pageLength:
+                    10,
+
+                lengthMenu:
+                [
+                    [10,25,50,100],
+                    [10,25,50,100]
+                ],
+
+
+                order:
+                [
+                    [
+                        11,
+                        <?= json_encode(
+                            $currentSort
+                        ) ?>
+                    ]
+                ],
+
+
+                columnDefs:
+                [
+
+                    {
+                        targets:
+                            0,
+
+                        orderable:
+                            false,
+
+                        searchable:
+                            false
+                    },
+
+
+                    {
+                        targets:
+                            10,
+
+                        orderable:
+                            false,
+
+                        searchable:
+                            false
+                    },
+
+
+                    {
+                        targets:
+                            11,
+
+                        visible:
+                            false,
+
+                        searchable:
+                            false
+                    }
+
+                ],
+
+
+                searching:
+                    true,
+
+                paging:
+                    true,
+
+                info:
+                    true,
+
+
+                drawCallback:
+                function()
+                {
+
+                    const api =
+                        this.api();
+
+
+                    const info =
+                        api.page.info();
+
+
+                    api
+                        .column(
+                            0,
+                            {
+                                page:
+                                    'current',
+
+                                search:
+                                    'applied',
+
+                                order:
+                                    'applied'
+                            }
+                        )
+                        .nodes()
+                        .each(
+                            function(
+                                cell,
+                                index
+                            )
+                            {
+
+                                cell.innerHTML =
+                                    info.start
+                                    +
+                                    index
+                                    +
+                                    1;
+                            }
+                        );
+                }
+
+            });
+
+
+    /* =====================================================
        RESTORE SEARCH
-    ========================================================== */
+    ===================================================== */
 
-    const currentSearch =
-        <?= json_encode($currentSearch) ?>;
+    const previousSearch =
+        <?= json_encode(
+            $currentSearch
+        ) ?>;
 
-    if (currentSearch !== '') {
+
+    if (
+        previousSearch
+        !== ''
+    ) {
+
+        $('#searchInput')
+            .val(
+                previousSearch
+            );
+
 
         table
-            .search(currentSearch)
+            .search(
+                previousSearch
+            )
             .draw();
-
     }
 
 
-    /* ==========================================================
-       RESTORE TYPE
-    ========================================================== */
-
-    const currentType =
-        <?= json_encode($currentType) ?>;
-
-    if (currentType !== '') {
-
-        table
-            .column(2)
-            .search(currentType)
-            .draw();
-
-    }
-
-
-    /* ==========================================================
+    /* =====================================================
        SEARCH
-    ========================================================== */
+    ===================================================== */
 
-    $('#searchInput').on('keyup', function () {
+    $('#searchInput').on(
+        'input',
+        function()
+        {
 
-        table
-            .search(this.value)
-            .draw();
+            table
+                .search(
+                    this.value
+                )
+                .draw();
+        }
+    );
 
-    });
+
+    /* =====================================================
+       DATE
+    ===================================================== */
+
+    $('#recordDateFilter').on(
+        'change',
+        function()
+        {
+
+            selectedRecordDate =
+                this.value
+                ||
+                '';
 
 
-    /* ==========================================================
+            table.draw();
+        }
+    );
+
+
+    /* =====================================================
+       TODAY
+    ===================================================== */
+
+    $('#todayDateBtn').on(
+        'click',
+        function()
+        {
+
+            const now =
+                new Date();
+
+
+            const year =
+                now.getFullYear();
+
+
+            const month =
+                String(
+                    now.getMonth()
+                    +
+                    1
+                )
+                .padStart(
+                    2,
+                    '0'
+                );
+
+
+            const day =
+                String(
+                    now.getDate()
+                )
+                .padStart(
+                    2,
+                    '0'
+                );
+
+
+            const today =
+                `${year}-${month}-${day}`;
+
+
+            $('#recordDateFilter')
+                .val(
+                    today
+                );
+
+
+            selectedRecordDate =
+                today;
+
+
+            table.draw();
+        }
+    );
+
+
+    /* =====================================================
+       CLEAR DATE
+    ===================================================== */
+
+    $('#clearDateBtn').on(
+        'click',
+        function()
+        {
+
+            $('#recordDateFilter')
+                .val('');
+
+
+            selectedRecordDate =
+                '';
+
+
+            table.draw();
+        }
+    );
+
+
+    /* =====================================================
        TYPE
-    ========================================================== */
+    ===================================================== */
 
-    $('#typeFilter').on('change', function () {
+    $('#typeFilter').on(
+        'change',
+        function()
+        {
 
-        table
-            .column(2)
-            .search(this.value)
-            .draw();
-
-    });
+            selectedOrderType =
+                this.value
+                ||
+                '';
 
 
-    /* ==========================================================
+            table.draw();
+        }
+    );
+
+
+    /* =====================================================
        SORT
-    ========================================================== */
+    ===================================================== */
 
-    $('#sortFilter').on('change', function () {
+    $('#sortFilter').on(
+        'change',
+        function()
+        {
 
-        table
-            .order([
-                [0, this.value]
-            ])
-            .draw();
+            table
+                .order([
+                    [
+                        11,
+                        this.value
+                    ]
+                ])
+                .draw();
+        }
+    );
 
-    });
 
-
-    /* ==========================================================
-       PREPARE CONFIRMATION
-    ========================================================== */
+    /* =====================================================
+       PREPARE
+    ===================================================== */
 
     $(document).on(
         'click',
         '.prepareBtn',
-        function (e) {
+        function(event)
+        {
 
-            e.preventDefault();
+            event.preventDefault();
 
-            const url = this.href;
+
+            const url =
+                this.href;
+
 
             Swal.fire({
 
-                title: 'Prepare Medication?',
+                icon:
+                    'question',
+
+                title:
+                    'Prepare Medication?',
 
                 text:
-                    'Confirm that this medication is ready for the patient.',
+                    'Confirm that this medication should be prepared.',
 
-                icon: 'question',
+                showCancelButton:
+                    true,
 
-                showCancelButton: true,
+                confirmButtonText:
+                    'Yes, Prepare',
 
-                confirmButtonColor: '#198754',
+                cancelButtonText:
+                    'Cancel',
 
-                cancelButtonColor: '#6c757d',
+                confirmButtonColor:
+                    '#16a34a',
 
-                confirmButtonText: 'Yes, Prepare',
+                cancelButtonColor:
+                    '#64748b'
 
-                cancelButtonText: 'Cancel'
+            })
+            .then(
+                function(result)
+                {
 
-            }).then(function (result) {
+                    if (
+                        result.isConfirmed
+                    ) {
 
-                if (result.isConfirmed) {
-
-                    window.location.href = url;
-
+                        window.location.href =
+                            url;
+                    }
                 }
-
-            });
-
+            );
         }
     );
 
 
-    /* ==========================================================
-       PATIENT COLLECTION
-    ========================================================== */
+    /* =====================================================
+       COLLECT
+    ===================================================== */
 
     $(document).on(
         'click',
         '.collectBtn',
-        function (e) {
+        function(event)
+        {
 
-            e.preventDefault();
+            event.preventDefault();
 
-            const url = this.href;
+
+            const url =
+                this.href;
+
 
             Swal.fire({
 
-                title: 'Confirm Collection',
+                icon:
+                    'question',
+
+                title:
+                    'Confirm Collection',
 
                 text:
                     'Confirm that the medication has been handed to the patient.',
 
-                icon: 'question',
+                showCancelButton:
+                    true,
 
-                showCancelButton: true,
+                confirmButtonText:
+                    'Yes, Collected',
 
-                confirmButtonColor: '#0d6efd',
+                cancelButtonText:
+                    'Cancel',
 
-                cancelButtonColor: '#6c757d',
+                confirmButtonColor:
+                    '#2563eb',
 
-                confirmButtonText: 'Yes, Collected',
+                cancelButtonColor:
+                    '#64748b'
 
-                cancelButtonText: 'Cancel'
+            })
+            .then(
+                function(result)
+                {
 
-            }).then(function (result) {
+                    if (
+                        result.isConfirmed
+                    ) {
 
-                if (result.isConfirmed) {
-
-                    window.location.href = url;
-
+                        window.location.href =
+                            url;
+                    }
                 }
-
-            });
-
+            );
         }
     );
 
-});
+}
+);
 
 
-/* ==============================================================
-   SUCCESS - PREPARED
-============================================================== */
+/* =========================================================
+   PREPARE SUCCESS
+========================================================= */
 
-<?php if (isset($_GET['success'])): ?>
+<?php if (
+    isset(
+        $_GET[
+            'success'
+        ]
+    )
+): ?>
+
 
 document.addEventListener(
     'DOMContentLoaded',
-    function () {
+    function()
+    {
 
         <?php if (
-            $_GET['success'] === 'already'
+            $_GET[
+                'success'
+            ]
+            ===
+            'already'
         ): ?>
+
 
         Swal.fire({
 
-            icon: 'info',
+            icon:
+                'info',
 
-            title: 'Already Prepared',
+            title:
+                'Already Prepared',
 
             text:
-                'This medication has already been prepared for today.',
+                'This medication has already been prepared.',
 
-            confirmButtonColor: '#0d6efd'
-
+            confirmButtonColor:
+                '#2563eb'
         });
+
 
         <?php else: ?>
 
+
         Swal.fire({
 
-            icon: 'success',
+            icon:
+                'success',
 
-            title: 'Medication Ready',
+            title:
+                'Medication Ready',
 
             text:
-                'Medication has been prepared successfully.',
+                'The medication has been prepared successfully.',
 
-            confirmButtonColor: '#198754'
-
+            confirmButtonColor:
+                '#16a34a'
         });
+
 
         <?php endif; ?>
 
     }
 );
 
+
 <?php endif; ?>
 
 
-/* ==============================================================
-   SUCCESS - COLLECTED
-============================================================== */
+/* =========================================================
+   COLLECT SUCCESS
+========================================================= */
 
-<?php if (isset($_GET['collected'])): ?>
+<?php if (
+    isset(
+        $_GET[
+            'collected'
+        ]
+    )
+): ?>
+
 
 document.addEventListener(
     'DOMContentLoaded',
-    function () {
+    function()
+    {
+
+        <?php if (
+            $_GET[
+                'collected'
+            ]
+            ===
+            'already'
+        ): ?>
+
 
         Swal.fire({
 
-            icon: 'success',
+            icon:
+                'info',
 
-            title: 'Medication Collected',
+            title:
+                'Already Collected',
+
+            text:
+                'This medication has already been collected.',
+
+            confirmButtonColor:
+                '#2563eb'
+        });
+
+
+        <?php else: ?>
+
+
+        Swal.fire({
+
+            icon:
+                'success',
+
+            title:
+                'Medication Collected',
 
             text:
                 'Medication has been marked as collected successfully.',
 
-            confirmButtonColor: '#0d6efd'
+            confirmButtonColor:
+                '#2563eb'
+        });
 
+
+        <?php endif; ?>
+
+    }
+);
+
+
+<?php endif; ?>
+
+
+/* =========================================================
+   ERROR POPUP
+========================================================= */
+
+<?php if (
+    isset(
+        $_GET['error']
+    )
+): ?>
+
+
+document.addEventListener(
+    'DOMContentLoaded',
+    function()
+    {
+
+        Swal.fire({
+
+            icon:
+                'error',
+
+            title:
+                'Unable to Process Medication',
+
+            text:
+                <?= json_encode(
+                    $_GET[
+                        'message'
+                    ]
+                    ??
+                    'Unable to process medication.'
+                ) ?>,
+
+            confirmButtonColor:
+                '#dc2626',
+
+            confirmButtonText:
+                'Close'
         });
 
     }
 );
 
+
 <?php endif; ?>
 
+
 </script>
+
 
 </body>
 

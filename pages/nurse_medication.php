@@ -3,130 +3,815 @@
 session_start();
 include("../config/config.php");
 
+date_default_timezone_set('Asia/Kuala_Lumpur');
+
+
 /* =========================================================
    ROLE CHECK
 ========================================================= */
 
-if (!isset($_SESSION['role']) || $_SESSION['role'] != 'nurse') {
+if (
+    !isset($_SESSION['role']) ||
+    $_SESSION['role'] !== 'nurse'
+) {
     header("Location: ../auth/login.php");
     exit();
 }
 
-$staff_id = $_SESSION['user_id'] ?? 0;
+
+$staff_id =
+    (int)(
+        $_SESSION['user_id']
+        ?? 0
+    );
+
+if ($staff_id <= 0) {
+    die("Invalid nurse account.");
+}
 
 
 /* =========================================================
-   GIVE MEDICATION
+   SAFE HTML
 ========================================================= */
 
-if (isset($_POST['give_medication'])) {
+function h($value)
+{
+    return htmlspecialchars(
+        (string)($value ?? ''),
+        ENT_QUOTES,
+        'UTF-8'
+    );
+}
 
-    $medorder_id = $_POST['medorder_id'] ?? 0;
 
-    if (!is_numeric($medorder_id) || $medorder_id <= 0) {
+/* =========================================================
+   REDIRECT HELPER
+========================================================= */
 
-        header("Location: nurse_medication.php?error=invalid");
-        exit();
+function redirectMedication($params = [])
+{
+    $url =
+        "nurse_medication.php";
+
+    if (!empty($params)) {
+
+        $url .=
+            "?"
+            .
+            http_build_query(
+                $params
+            );
     }
+
+    header(
+        "Location: " . $url
+    );
+
+    exit();
+}
+
+
+/* =========================================================
+   GIVE SCHEDULED MEDICATION DOSE
+
+   FLOW:
+
+   Medication Schedule
+        ↓
+   Pharmacy Preparation
+        ↓
+   Ready For Nurse Pickup
+        ↓
+   Nurse Collects
+        ↓
+   Collected / Collected By Nurse
+        ↓
+   Nurse Give Dose
+        ↓
+   Medication Admin
+        ↓
+   Administered
+
+   IMPORTANT:
+
+   - Today prepared dose = allowed
+   - Previous prepared dose = overdue but allowed
+   - Future dose = NOT allowed
+   - Discharged patient = NOT allowed
+   - Cancelled schedule = NOT allowed
+========================================================= */
+
+if (
+    isset(
+        $_POST['give_schedule']
+    )
+) {
+
+    $schedule_id =
+        (int)(
+            $_POST['schedule_id']
+            ?? 0
+        );
+
+
+    if ($schedule_id <= 0) {
+
+        redirectMedication([
+            'error' => 'invalid'
+        ]);
+    }
+
 
     try {
 
-        /* -------------------------------------------------
-           CHECK MEDICATION ORDER EXISTS
-        ------------------------------------------------- */
+        $conn->beginTransaction();
 
-        $orderCheck = $conn->prepare("
-            SELECT COUNT(*)
-            FROM SYARMIMI.MEDICATION_ORDER
-            WHERE MEDORDER_ID = :medorder_id
-        ");
 
-        $orderCheck->execute([
-            ':medorder_id' => $medorder_id
+        /* =================================================
+           GET / LOCK SCHEDULE
+        ================================================= */
+
+        $scheduleStmt =
+            $conn->prepare("
+
+                SELECT
+
+                    MS.SCHEDULE_ID,
+                    MS.MEDORDER_ID,
+                    MS.SCHEDULE_DATE,
+                    MS.SCHEDULE_TIME,
+                    MS.STATUS,
+
+                    MO.ADMISSION_ID,
+                    MO.MED_START_DATE,
+                    MO.MED_END_DATE,
+
+                    A.DISCHARGE_DATE,
+                    A.EXPECTED_DISCHARGE_DATE
+
+                FROM
+                    SYARMIMI.MEDICATION_SCHEDULE MS
+
+                JOIN
+                    SYARMIMI.MEDICATION_ORDER MO
+
+                    ON
+                        MS.MEDORDER_ID =
+                        MO.MEDORDER_ID
+
+                JOIN
+                    SYARMIMI.ADMISSION A
+
+                    ON
+                        MO.ADMISSION_ID =
+                        A.ADMISSION_ID
+
+                WHERE
+                    MS.SCHEDULE_ID = ?
+
+                FOR UPDATE
+
+            ");
+
+
+        $scheduleStmt->execute([
+            $schedule_id
         ]);
 
-        if ($orderCheck->fetchColumn() == 0) {
 
-            header("Location: nurse_medication.php?error=not_found");
-            exit();
-        }
-
-
-        /* -------------------------------------------------
-           CHECK IF ALREADY GIVEN
-        ------------------------------------------------- */
-
-        $check = $conn->prepare("
-            SELECT COUNT(*)
-            FROM SYARMIMI.MEDICATION_ADMIN
-            WHERE MEDORDER_ID = :medorder_id
-        ");
-
-        $check->execute([
-            ':medorder_id' => $medorder_id
-        ]);
-
-        $alreadyGiven = $check->fetchColumn();
-
-
-        if ($alreadyGiven > 0) {
-
-            header(
-                "Location: nurse_medication.php?error=already_given"
+        $schedule =
+            $scheduleStmt->fetch(
+                PDO::FETCH_ASSOC
             );
 
-            exit();
+
+        if (!$schedule) {
+
+            throw new Exception(
+                "Medication schedule not found."
+            );
         }
 
 
-        /* -------------------------------------------------
-           INSERT MEDICATION ADMINISTRATION
-           
-           Existing columns:
-           MEDORDER_ID
-           ADMIN_TIME
-           ACCOUNT_ID
-        ------------------------------------------------- */
+        /* =================================================
+           PATIENT MUST STILL BE ADMITTED
+        ================================================= */
 
-        $insert = $conn->prepare("
-            INSERT INTO SYARMIMI.MEDICATION_ADMIN
-            (
-                MEDORDER_ID,
-                ADMIN_TIME,
-                ACCOUNT_ID
+        if (
+            !empty(
+                $schedule[
+                    'DISCHARGE_DATE'
+                ]
             )
-            VALUES
-            (
-                :medorder_id,
-                SYSDATE,
-                :account_id
-            )
-        ");
+        ) {
 
-        $insert->execute([
-            ':medorder_id' => $medorder_id,
-            ':account_id' => $staff_id
+            throw new Exception(
+                "This patient has already been discharged."
+            );
+        }
+
+
+        /* =================================================
+           DATE VALIDATION
+
+           Previous date = overdue, allowed
+           Today = allowed
+           Future = blocked
+        ================================================= */
+
+        $dateCheck =
+            $conn->prepare("
+
+                SELECT COUNT(*)
+
+                FROM
+                    SYARMIMI.MEDICATION_SCHEDULE
+
+                WHERE
+                    SCHEDULE_ID = ?
+
+                AND
+                    TRUNC(
+                        SCHEDULE_DATE
+                    )
+                    <=
+                    TRUNC(
+                        SYSDATE
+                    )
+
+            ");
+
+
+        $dateCheck->execute([
+            $schedule_id
         ]);
 
 
-        /* -------------------------------------------------
-           SUCCESS
-        ------------------------------------------------- */
+        if (
+            (int)$dateCheck
+                ->fetchColumn()
+            === 0
+        ) {
 
-        header(
-            "Location: nurse_medication.php?success=1"
+            throw new Exception(
+                "Future medication doses cannot be administered yet."
+            );
+        }
+
+
+        /* =================================================
+           VERIFY PHARMACY PREPARATION
+
+           IMPORTANT FIX:
+           COLLECTED is valid for inpatient nurse workflow.
+        ================================================= */
+
+        $prepStmt =
+            $conn->prepare("
+
+                SELECT
+
+                    PREP_ID,
+                    STATUS
+
+                FROM
+                    SYARMIMI.PHARMACY_PREPARATION
+
+                WHERE
+                    SCHEDULE_ID = ?
+
+                ORDER BY
+                    PREP_ID DESC
+
+                FETCH FIRST
+                    1 ROW ONLY
+
+            ");
+
+
+        $prepStmt->execute([
+            $schedule_id
+        ]);
+
+
+        $prep =
+            $prepStmt->fetch(
+                PDO::FETCH_ASSOC
+            );
+
+
+        if (!$prep) {
+
+            throw new Exception(
+                "This medication dose has not been prepared by pharmacy."
+            );
+        }
+
+
+        $prepStatus =
+            strtoupper(
+                trim(
+                    $prep['STATUS']
+                    ?? ''
+                )
+            );
+
+
+        /* =================================================
+           VALID PHARMACY STATUSES
+
+           READY FOR NURSE PICKUP
+           READY FOR NURSE
+           PREPARED
+           COLLECTED
+
+           COLLECTED means nurse already picked medication
+           from pharmacy, but has not administered it yet.
+        ================================================= */
+
+        if (
+            !in_array(
+                $prepStatus,
+                [
+                    'READY FOR NURSE PICKUP',
+                    'READY FOR NURSE',
+                    'PREPARED',
+                    'COLLECTED'
+                ],
+                true
+            )
+        ) {
+
+            if (
+                in_array(
+                    $prepStatus,
+                    [
+                        'ADMINISTERED',
+                        'GIVEN',
+                        'DELIVERED'
+                    ],
+                    true
+                )
+            ) {
+
+                throw new Exception(
+                    "This medication dose has already been administered."
+                );
+            }
+
+
+            if (
+                in_array(
+                    $prepStatus,
+                    [
+                        'CANCELLED',
+                        'CANCELLED - DISCHARGED'
+                    ],
+                    true
+                )
+            ) {
+
+                throw new Exception(
+                    "This medication dose has been cancelled."
+                );
+            }
+
+
+            throw new Exception(
+                "This medication dose is not ready for nurse administration."
+            );
+        }
+
+
+        /* =================================================
+           CHECK SCHEDULE STATUS
+
+           Collected By Nurse is ALLOWED.
+        ================================================= */
+
+        $scheduleStatus =
+            strtoupper(
+                trim(
+                    $schedule['STATUS']
+                    ?? ''
+                )
+            );
+
+
+        if (
+            in_array(
+                $scheduleStatus,
+                [
+                    'ADMINISTERED',
+                    'GIVEN',
+                    'DELIVERED',
+                    'COMPLETED',
+                    'CANCELLED',
+                    'CANCELLED - DISCHARGED'
+                ],
+                true
+            )
+        ) {
+
+            throw new Exception(
+                "This medication dose is no longer available for administration."
+            );
+        }
+
+
+        /* =================================================
+           CHECK DUPLICATE ADMINISTRATION
+        ================================================= */
+
+        $adminCheck =
+            $conn->prepare("
+
+                SELECT COUNT(*)
+
+                FROM
+                    SYARMIMI.MEDICATION_ADMIN
+
+                WHERE
+                    SCHEDULE_ID = ?
+
+            ");
+
+
+        $adminCheck->execute([
+            $schedule_id
+        ]);
+
+
+        if (
+            (int)$adminCheck
+                ->fetchColumn()
+            > 0
+        ) {
+
+            throw new Exception(
+                "This medication dose has already been recorded as administered."
+            );
+        }
+
+
+        /* =================================================
+           INSERT MEDICATION ADMINISTRATION
+        ================================================= */
+
+        $insertAdmin =
+            $conn->prepare("
+
+                INSERT INTO
+                    SYARMIMI.MEDICATION_ADMIN
+                (
+                    ADMIN_ID,
+                    ADMIN_TIME,
+                    MEDORDER_ID,
+                    ACCOUNT_ID,
+                    SCHEDULE_ID
+                )
+
+                VALUES
+                (
+                    SYARMIMI.MEDADMIN_SEQ.NEXTVAL,
+                    SYSDATE,
+                    ?,
+                    ?,
+                    ?
+                )
+
+            ");
+
+
+        $insertAdmin->execute([
+
+            $schedule[
+                'MEDORDER_ID'
+            ],
+
+            $staff_id,
+
+            $schedule_id
+
+        ]);
+
+
+        /* =================================================
+           UPDATE SCHEDULE
+        ================================================= */
+
+        $updateSchedule =
+            $conn->prepare("
+
+                UPDATE
+                    SYARMIMI.MEDICATION_SCHEDULE
+
+                SET
+                    STATUS =
+                    'Administered'
+
+                WHERE
+                    SCHEDULE_ID = ?
+
+            ");
+
+
+        $updateSchedule->execute([
+            $schedule_id
+        ]);
+
+
+        /* =================================================
+           UPDATE PHARMACY PREPARATION
+        ================================================= */
+
+        $updatePrep =
+            $conn->prepare("
+
+                UPDATE
+                    SYARMIMI.PHARMACY_PREPARATION
+
+                SET
+                    STATUS =
+                    'Administered'
+
+                WHERE
+                    PREP_ID = ?
+
+            ");
+
+
+        $updatePrep->execute([
+            $prep[
+                'PREP_ID'
+            ]
+        ]);
+
+
+        /* =================================================
+           COMMIT
+        ================================================= */
+
+        $conn->commit();
+
+
+        redirectMedication([
+            'success' => '1'
+        ]);
+
+
+    }
+    catch (Throwable $e) {
+
+        if (
+            $conn->inTransaction()
+        ) {
+
+            $conn->rollBack();
+        }
+
+
+        redirectMedication([
+
+            'error' =>
+                'give_failed',
+
+            'message' =>
+                $e->getMessage()
+
+        ]);
+    }
+}
+
+
+/* =========================================================
+   GIVE LEGACY MEDICATION
+
+   Old medication orders created before
+   MEDICATION_SCHEDULE existed.
+========================================================= */
+
+if (
+    isset(
+        $_POST['give_legacy']
+    )
+) {
+
+    $medorder_id =
+        (int)(
+            $_POST['medorder_id']
+            ?? 0
         );
 
-        exit();
+
+    if ($medorder_id <= 0) {
+
+        redirectMedication([
+            'error' => 'invalid'
+        ]);
+    }
 
 
-    } catch (PDOException $e) {
+    try {
 
-        header(
-            "Location: nurse_medication.php?error=database"
-        );
+        $conn->beginTransaction();
 
-        exit();
+
+        /* =================================================
+           CHECK ACTIVE ADMISSION ORDER
+        ================================================= */
+
+        $orderCheck =
+            $conn->prepare("
+
+                SELECT
+                    COUNT(*)
+
+                FROM
+                    SYARMIMI.MEDICATION_ORDER MO
+
+                JOIN
+                    SYARMIMI.ADMISSION A
+
+                    ON
+                        MO.ADMISSION_ID =
+                        A.ADMISSION_ID
+
+                WHERE
+                    MO.MEDORDER_ID = ?
+
+                AND
+                    A.DISCHARGE_DATE
+                    IS NULL
+
+            ");
+
+
+        $orderCheck->execute([
+            $medorder_id
+        ]);
+
+
+        if (
+            (int)$orderCheck
+                ->fetchColumn()
+            === 0
+        ) {
+
+            throw new Exception(
+                "Medication order not found or patient has already been discharged."
+            );
+        }
+
+
+        /* =================================================
+           CHECK EXISTING LEGACY ADMINISTRATION
+        ================================================= */
+
+        $check =
+            $conn->prepare("
+
+                SELECT COUNT(*)
+
+                FROM
+                    SYARMIMI.MEDICATION_ADMIN
+
+                WHERE
+                    MEDORDER_ID = ?
+
+                AND
+                    SCHEDULE_ID
+                    IS NULL
+
+            ");
+
+
+        $check->execute([
+            $medorder_id
+        ]);
+
+
+        if (
+            (int)$check
+                ->fetchColumn()
+            > 0
+        ) {
+
+            throw new Exception(
+                "This legacy medication has already been administered."
+            );
+        }
+
+
+        /* =================================================
+           INSERT LEGACY ADMINISTRATION
+        ================================================= */
+
+        $insert =
+            $conn->prepare("
+
+                INSERT INTO
+                    SYARMIMI.MEDICATION_ADMIN
+                (
+                    ADMIN_ID,
+                    ADMIN_TIME,
+                    MEDORDER_ID,
+                    ACCOUNT_ID,
+                    SCHEDULE_ID
+                )
+
+                VALUES
+                (
+                    SYARMIMI.MEDADMIN_SEQ.NEXTVAL,
+                    SYSDATE,
+                    ?,
+                    ?,
+                    NULL
+                )
+
+            ");
+
+
+        $insert->execute([
+
+            $medorder_id,
+
+            $staff_id
+
+        ]);
+
+
+        /* =================================================
+           UPDATE LEGACY PHARMACY PREPARATION
+        ================================================= */
+
+        $legacyPrepUpdate =
+            $conn->prepare("
+
+                UPDATE
+                    SYARMIMI.PHARMACY_PREPARATION
+
+                SET
+                    STATUS =
+                    'Administered'
+
+                WHERE
+                    MEDORDER_ID = ?
+
+                AND
+                    SCHEDULE_ID
+                    IS NULL
+
+                AND
+                    UPPER(
+                        TRIM(
+                            STATUS
+                        )
+                    )
+                    IN
+                    (
+                        'READY FOR NURSE PICKUP',
+                        'READY FOR NURSE',
+                        'PREPARED',
+                        'COLLECTED'
+                    )
+
+            ");
+
+
+        $legacyPrepUpdate->execute([
+            $medorder_id
+        ]);
+
+
+        $conn->commit();
+
+
+        redirectMedication([
+            'success' => '1'
+        ]);
+
+
+    }
+    catch (Throwable $e) {
+
+        if (
+            $conn->inTransaction()
+        ) {
+
+            $conn->rollBack();
+        }
+
+
+        redirectMedication([
+
+            'error' =>
+                'give_failed',
+
+            'message' =>
+                $e->getMessage()
+
+        ]);
     }
 }
 
@@ -135,61 +820,249 @@ if (isset($_POST['give_medication'])) {
    FILTER VALUES
 ========================================================= */
 
-$search = trim($_GET['search'] ?? '');
+$search =
+    trim(
+        $_GET['search']
+        ?? ''
+    );
 
-$wardFilter = trim($_GET['ward'] ?? '');
 
-$sort = $_GET['sort'] ?? 'newest';
+$wardFilter =
+    trim(
+        $_GET['ward']
+        ?? ''
+    );
+
+
+$sort =
+    $_GET['sort']
+    ?? 'time';
+
+
+$allowedSorts = [
+    'time',
+    'patient',
+    'ward',
+    'medication'
+];
+
+
+if (
+    !in_array(
+        $sort,
+        $allowedSorts,
+        true
+    )
+) {
+
+    $sort =
+        'time';
+}
 
 
 /* =========================================================
-   SORTING
+   SQL SORT
+
+   Date first.
+   Old overdue ready doses appear first.
 ========================================================= */
 
-$orderBy = "mo.MEDORDER_ID DESC";
+$orderBy = "
 
-if ($sort === 'patient') {
+    MS.SCHEDULE_DATE ASC,
+    MS.SCHEDULE_TIME ASC,
+    PA.NAME ASC
 
-    $orderBy = "UPPER(p.NAME) ASC";
+";
 
+
+if (
+    $sort === 'patient'
+) {
+
+    $orderBy = "
+
+        UPPER(PA.NAME) ASC,
+        MS.SCHEDULE_DATE ASC,
+        MS.SCHEDULE_TIME ASC
+
+    ";
 }
-elseif ($sort === 'ward') {
+elseif (
+    $sort === 'ward'
+) {
 
-    $orderBy = "UPPER(w.WARD_NAME) ASC";
+    $orderBy = "
 
+        UPPER(W.WARD_NAME) ASC,
+        MS.SCHEDULE_DATE ASC,
+        MS.SCHEDULE_TIME ASC
+
+    ";
+}
+elseif (
+    $sort === 'medication'
+) {
+
+    $orderBy = "
+
+        UPPER(M.MEDICATION_NAME) ASC,
+        MS.SCHEDULE_DATE ASC,
+        MS.SCHEDULE_TIME ASC
+
+    ";
 }
 
 
 /* =========================================================
-   WHERE
+   READY MEDICATION DOSES
+
+   SHOW:
+   - Active admission
+   - Prepared by pharmacy
+   - Collected by nurse
+   - Today OR past due
+   - Not administered
+   - Not cancelled
+
+   HIDE:
+   - Future doses
+   - Discharged patient
+   - Cancelled doses
+   - Already administered
 ========================================================= */
 
 $where = "
-    WHERE ma.MEDORDER_ID IS NULL
+
+    WHERE
+        A.DISCHARGE_DATE
+        IS NULL
+
+    AND
+        TRUNC(
+            MS.SCHEDULE_DATE
+        )
+        <=
+        TRUNC(
+            SYSDATE
+        )
+
+    AND
+        UPPER(
+            TRIM(
+                PP.STATUS
+            )
+        )
+        IN
+        (
+            'READY FOR NURSE PICKUP',
+            'READY FOR NURSE',
+            'PREPARED',
+            'COLLECTED'
+        )
+
+    AND
+        UPPER(
+            TRIM(
+                NVL(
+                    MS.STATUS,
+                    'Pending Preparation'
+                )
+            )
+        )
+        NOT IN
+        (
+            'ADMINISTERED',
+            'GIVEN',
+            'DELIVERED',
+            'COMPLETED',
+            'CANCELLED',
+            'CANCELLED - DISCHARGED'
+        )
+
+    AND NOT EXISTS
+    (
+        SELECT 1
+
+        FROM
+            SYARMIMI.MEDICATION_ADMIN MA
+
+        WHERE
+            MA.SCHEDULE_ID =
+            MS.SCHEDULE_ID
+    )
+
 ";
+
 
 $params = [];
 
 
 /* =========================================================
-   SEARCH
+   SEARCH FILTER
 ========================================================= */
 
-if ($search !== '') {
+if (
+    $search !== ''
+) {
 
     $where .= "
+
         AND
         (
-            UPPER(p.NAME) LIKE UPPER(:search)
-            OR UPPER(m.MEDICATION_NAME) LIKE UPPER(:search)
-            OR UPPER(w.WARD_NAME) LIKE UPPER(:search)
-            OR TO_CHAR(a.ADMISSION_ID) LIKE :search_id
+            UPPER(
+                PA.NAME
+            )
+            LIKE
+            UPPER(?)
+
+            OR
+
+            UPPER(
+                M.MEDICATION_NAME
+            )
+            LIKE
+            UPPER(?)
+
+            OR
+
+            UPPER(
+                W.WARD_NAME
+            )
+            LIKE
+            UPPER(?)
+
+            OR
+
+            TO_CHAR(
+                A.ADMISSION_ID
+            )
+            LIKE
+            ?
         )
+
     ";
 
-    $params[':search'] = '%' . $search . '%';
 
-    $params[':search_id'] = '%' . $search . '%';
+    $searchValue =
+        '%'
+        .
+        $search
+        .
+        '%';
+
+
+    $params[] =
+        $searchValue;
+
+    $params[] =
+        $searchValue;
+
+    $params[] =
+        $searchValue;
+
+    $params[] =
+        $searchValue;
 }
 
 
@@ -197,298 +1070,991 @@ if ($search !== '') {
    WARD FILTER
 ========================================================= */
 
-if ($wardFilter !== '') {
+if (
+    $wardFilter !== ''
+) {
 
     $where .= "
-        AND UPPER(w.WARD_NAME) = UPPER(:ward)
+
+        AND
+            UPPER(
+                W.WARD_NAME
+            )
+            =
+            UPPER(?)
+
     ";
 
-    $params[':ward'] = $wardFilter;
+
+    $params[] =
+        $wardFilter;
 }
 
 
 /* =========================================================
-   FETCH PENDING MEDICATION
+   FETCH READY DOSES
+
+   IMPORTANT:
+   Latest PHARMACY_PREPARATION row only.
 ========================================================= */
 
-$sql = "
+$doseSql = "
 
-SELECT
+    SELECT
 
-    mo.MEDORDER_ID,
+        MS.SCHEDULE_ID,
 
-    a.ADMISSION_ID,
+        MS.SCHEDULE_TIME,
 
-    p.NAME,
+        TO_CHAR(
+            MS.SCHEDULE_DATE,
+            'DD-MON-YY'
+        )
+        AS SCHEDULE_DATE_DISPLAY,
 
-    m.MEDICATION_NAME,
+        TO_CHAR(
+            MS.SCHEDULE_DATE,
+            'YYYY-MM-DD'
+        )
+        AS SCHEDULE_DATE_VALUE,
 
-    mo.DOSAGE,
+        CASE
 
-    mo.FREQUENCY,
+            WHEN
+                TRUNC(
+                    MS.SCHEDULE_DATE
+                )
+                <
+                TRUNC(
+                    SYSDATE
+                )
 
-    w.WARD_NAME,
+            THEN
+                1
 
-    b.BED_NUMBER
+            ELSE
+                0
 
-FROM SYARMIMI.MEDICATION_ORDER mo
+        END
+        AS IS_OVERDUE,
 
-JOIN SYARMIMI.ADMISSION a
-    ON mo.ADMISSION_ID = a.ADMISSION_ID
+        MS.STATUS
+        AS SCHEDULE_STATUS,
 
-JOIN SYARMIMI.PATIENT p
-    ON a.PATIENT_ID = p.PATIENT_ID
+        MO.MEDORDER_ID,
 
-JOIN SYARMIMI.MEDICATION m
-    ON mo.MEDICATION_ID = m.MEDICATION_ID
+        A.ADMISSION_ID,
 
-/* Medication must already be prepared by pharmacy */
-JOIN SYARMIMI.PHARMACY_PREPARATION pp
-    ON mo.MEDORDER_ID = pp.MEDORDER_ID
+        PA.NAME,
 
-LEFT JOIN SYARMIMI.BED b
-    ON a.BED_ID = b.BED_ID
+        M.MEDICATION_NAME,
 
-LEFT JOIN SYARMIMI.WARD w
-    ON b.WARD_ID = w.WARD_ID
+        MO.DOSAGE,
 
-/* Remove medication already administered */
-LEFT JOIN SYARMIMI.MEDICATION_ADMIN ma
-    ON mo.MEDORDER_ID = ma.MEDORDER_ID
+        MO.FREQUENCY,
 
-$where
+        W.WARD_NAME,
 
-ORDER BY $orderBy
+        B.BED_NUMBER,
+
+        PP.PREP_ID,
+
+        PP.STATUS
+        AS PREPARATION_STATUS,
+
+        PP.PREPARED_TIME
+
+    FROM
+        SYARMIMI.MEDICATION_SCHEDULE MS
+
+    JOIN
+        SYARMIMI.MEDICATION_ORDER MO
+
+        ON
+            MS.MEDORDER_ID =
+            MO.MEDORDER_ID
+
+    JOIN
+        SYARMIMI.ADMISSION A
+
+        ON
+            MO.ADMISSION_ID =
+            A.ADMISSION_ID
+
+    JOIN
+        SYARMIMI.PATIENT PA
+
+        ON
+            A.PATIENT_ID =
+            PA.PATIENT_ID
+
+    JOIN
+        SYARMIMI.MEDICATION M
+
+        ON
+            MO.MEDICATION_ID =
+            M.MEDICATION_ID
+
+    LEFT JOIN
+        SYARMIMI.BED B
+
+        ON
+            A.BED_ID =
+            B.BED_ID
+
+    LEFT JOIN
+        SYARMIMI.WARD W
+
+        ON
+            B.WARD_ID =
+            W.WARD_ID
+
+    JOIN
+    (
+        SELECT
+
+            PP1.PREP_ID,
+            PP1.SCHEDULE_ID,
+            PP1.MEDORDER_ID,
+            PP1.STATUS,
+            PP1.PREPARED_TIME
+
+        FROM
+            SYARMIMI.PHARMACY_PREPARATION PP1
+
+        JOIN
+        (
+            SELECT
+
+                SCHEDULE_ID,
+
+                MAX(PREP_ID)
+                AS MAX_PREP_ID
+
+            FROM
+                SYARMIMI.PHARMACY_PREPARATION
+
+            WHERE
+                SCHEDULE_ID
+                IS NOT NULL
+
+            GROUP BY
+                SCHEDULE_ID
+
+        )
+        LATEST
+
+        ON
+            PP1.PREP_ID =
+            LATEST.MAX_PREP_ID
+
+    )
+    PP
+
+    ON
+        PP.SCHEDULE_ID =
+        MS.SCHEDULE_ID
+
+    $where
+
+    ORDER BY
+        $orderBy
 
 ";
 
-$stmt = $conn->prepare($sql);
 
-$stmt->execute($params);
+$doseStmt =
+    $conn->prepare(
+        $doseSql
+    );
 
-$rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+$doseStmt->execute(
+    $params
+);
+
+
+$rows =
+    $doseStmt->fetchAll(
+        PDO::FETCH_ASSOC
+    );
 
 
 /* =========================================================
-   PENDING MEDICATION COUNT
+   LEGACY READY MEDICATION
+
+   Supports old data before scheduled-dose system.
 ========================================================= */
 
-$pendingCount = $conn->query("
+$legacyWhere = "
 
-    SELECT COUNT(mo.MEDORDER_ID)
+    WHERE
+        A.DISCHARGE_DATE
+        IS NULL
 
-    FROM SYARMIMI.MEDICATION_ORDER mo
+    AND
+        PP.SCHEDULE_ID
+        IS NULL
 
-    JOIN SYARMIMI.ADMISSION a
-        ON mo.ADMISSION_ID = a.ADMISSION_ID
+    AND
+        UPPER(
+            TRIM(
+                PP.STATUS
+            )
+        )
+        IN
+        (
+            'READY FOR NURSE PICKUP',
+            'READY FOR NURSE',
+            'PREPARED',
+            'COLLECTED'
+        )
 
-    JOIN SYARMIMI.PHARMACY_PREPARATION pp
-        ON mo.MEDORDER_ID = pp.MEDORDER_ID
+    AND NOT EXISTS
+    (
+        SELECT 1
 
-    LEFT JOIN SYARMIMI.MEDICATION_ADMIN ma
-        ON mo.MEDORDER_ID = ma.MEDORDER_ID
+        FROM
+            SYARMIMI.MEDICATION_SCHEDULE MS2
 
-    WHERE ma.MEDORDER_ID IS NULL
+        WHERE
+            MS2.MEDORDER_ID =
+            MO.MEDORDER_ID
+    )
 
-")->fetchColumn();
+    AND NOT EXISTS
+    (
+        SELECT 1
+
+        FROM
+            SYARMIMI.MEDICATION_ADMIN MA2
+
+        WHERE
+            MA2.MEDORDER_ID =
+            MO.MEDORDER_ID
+
+        AND
+            MA2.SCHEDULE_ID
+            IS NULL
+    )
+
+";
+
+
+$legacyParams = [];
+
+
+/* =========================================================
+   LEGACY SEARCH
+========================================================= */
+
+if (
+    $search !== ''
+) {
+
+    $legacyWhere .= "
+
+        AND
+        (
+            UPPER(
+                PA.NAME
+            )
+            LIKE
+            UPPER(?)
+
+            OR
+
+            UPPER(
+                M.MEDICATION_NAME
+            )
+            LIKE
+            UPPER(?)
+
+            OR
+
+            UPPER(
+                W.WARD_NAME
+            )
+            LIKE
+            UPPER(?)
+
+            OR
+
+            TO_CHAR(
+                A.ADMISSION_ID
+            )
+            LIKE
+            ?
+        )
+
+    ";
+
+
+    $searchValue =
+        '%'
+        .
+        $search
+        .
+        '%';
+
+
+    $legacyParams[] =
+        $searchValue;
+
+    $legacyParams[] =
+        $searchValue;
+
+    $legacyParams[] =
+        $searchValue;
+
+    $legacyParams[] =
+        $searchValue;
+}
+
+
+/* =========================================================
+   LEGACY WARD FILTER
+========================================================= */
+
+if (
+    $wardFilter !== ''
+) {
+
+    $legacyWhere .= "
+
+        AND
+            UPPER(
+                W.WARD_NAME
+            )
+            =
+            UPPER(?)
+
+    ";
+
+
+    $legacyParams[] =
+        $wardFilter;
+}
+
+
+/* =========================================================
+   LEGACY SORT
+========================================================= */
+
+$legacyOrder =
+    "MO.MEDORDER_ID DESC";
+
+
+if (
+    $sort === 'patient'
+) {
+
+    $legacyOrder =
+        "UPPER(PA.NAME) ASC";
+}
+elseif (
+    $sort === 'ward'
+) {
+
+    $legacyOrder =
+        "UPPER(W.WARD_NAME) ASC";
+}
+elseif (
+    $sort === 'medication'
+) {
+
+    $legacyOrder =
+        "UPPER(M.MEDICATION_NAME) ASC";
+}
+
+
+/* =========================================================
+   FETCH LEGACY RECORDS
+
+   Latest preparation row only.
+========================================================= */
+
+$legacySql = "
+
+    SELECT
+
+        MO.MEDORDER_ID,
+
+        A.ADMISSION_ID,
+
+        PA.NAME,
+
+        M.MEDICATION_NAME,
+
+        MO.DOSAGE,
+
+        MO.FREQUENCY,
+
+        W.WARD_NAME,
+
+        B.BED_NUMBER,
+
+        PP.PREP_ID,
+
+        PP.STATUS
+        AS PREPARATION_STATUS,
+
+        PP.PREPARED_TIME
+
+    FROM
+        SYARMIMI.MEDICATION_ORDER MO
+
+    JOIN
+        SYARMIMI.ADMISSION A
+
+        ON
+            MO.ADMISSION_ID =
+            A.ADMISSION_ID
+
+    JOIN
+        SYARMIMI.PATIENT PA
+
+        ON
+            A.PATIENT_ID =
+            PA.PATIENT_ID
+
+    JOIN
+        SYARMIMI.MEDICATION M
+
+        ON
+            MO.MEDICATION_ID =
+            M.MEDICATION_ID
+
+    LEFT JOIN
+        SYARMIMI.BED B
+
+        ON
+            A.BED_ID =
+            B.BED_ID
+
+    LEFT JOIN
+        SYARMIMI.WARD W
+
+        ON
+            B.WARD_ID =
+            W.WARD_ID
+
+    JOIN
+    (
+        SELECT
+
+            PP1.PREP_ID,
+            PP1.MEDORDER_ID,
+            PP1.SCHEDULE_ID,
+            PP1.STATUS,
+            PP1.PREPARED_TIME
+
+        FROM
+            SYARMIMI.PHARMACY_PREPARATION PP1
+
+        JOIN
+        (
+            SELECT
+
+                MEDORDER_ID,
+
+                MAX(PREP_ID)
+                AS MAX_PREP_ID
+
+            FROM
+                SYARMIMI.PHARMACY_PREPARATION
+
+            WHERE
+                SCHEDULE_ID
+                IS NULL
+
+            GROUP BY
+                MEDORDER_ID
+
+        )
+        LATEST
+
+        ON
+            PP1.PREP_ID =
+            LATEST.MAX_PREP_ID
+
+    )
+    PP
+
+    ON
+        PP.MEDORDER_ID =
+        MO.MEDORDER_ID
+
+    $legacyWhere
+
+    ORDER BY
+        $legacyOrder
+
+";
+
+
+$legacyStmt =
+    $conn->prepare(
+        $legacySql
+    );
+
+
+$legacyStmt->execute(
+    $legacyParams
+);
+
+
+$legacyRows =
+    $legacyStmt->fetchAll(
+        PDO::FETCH_ASSOC
+    );
+
+
+/* =========================================================
+   READY TO GIVE COUNT
+
+   Includes:
+   - today prepared
+   - today collected by nurse
+   - overdue prepared/collected
+   - legacy ready
+========================================================= */
+
+$pendingCount =
+    count($rows)
+    +
+    count($legacyRows);
+
+
+/* =========================================================
+   OVERDUE READY COUNT
+========================================================= */
+
+$overdueCount = 0;
+
+
+foreach (
+    $rows
+    as
+    $readyRow
+) {
+
+    if (
+        (int)(
+            $readyRow[
+                'IS_OVERDUE'
+            ]
+            ?? 0
+        )
+        === 1
+    ) {
+
+        $overdueCount++;
+    }
+}
+
+
+/* =========================================================
+   GIVEN TODAY
+========================================================= */
+
+$givenToday =
+    (int)$conn
+        ->query("
+
+            SELECT
+                COUNT(*)
+
+            FROM
+                SYARMIMI.MEDICATION_ADMIN
+
+            WHERE
+                TRUNC(
+                    ADMIN_TIME
+                )
+                =
+                TRUNC(
+                    SYSDATE
+                )
+
+        ")
+        ->fetchColumn();
 
 
 /* =========================================================
    ACTIVE WARDS
-=========================================================
-
-   Active Ward =
-   A ward containing at least ONE patient
-   whose DISCHARGE_DATE is NULL.
-
-   Example:
-
-   Ward A -> 2 patients -> Active
-   Ward B -> 1 patient  -> Active
-   Ward C -> 0 patients -> Not Active
-
-   COUNT(DISTINCT WARD_ID)
-   means each ward is counted only once.
 ========================================================= */
 
-$wardCount = $conn->query("
+$wardCount =
+    (int)$conn
+        ->query("
 
-    SELECT COUNT(DISTINCT w.WARD_ID)
+            SELECT
 
-    FROM SYARMIMI.ADMISSION a
+                COUNT(
+                    DISTINCT W.WARD_ID
+                )
 
-    JOIN SYARMIMI.BED b
-        ON a.BED_ID = b.BED_ID
+            FROM
+                SYARMIMI.ADMISSION A
 
-    JOIN SYARMIMI.WARD w
-        ON b.WARD_ID = w.WARD_ID
+            JOIN
+                SYARMIMI.BED B
 
-    WHERE a.DISCHARGE_DATE IS NULL
+                ON
+                    A.BED_ID =
+                    B.BED_ID
 
-")->fetchColumn();
+            JOIN
+                SYARMIMI.WARD W
+
+                ON
+                    B.WARD_ID =
+                    W.WARD_ID
+
+            WHERE
+                A.DISCHARGE_DATE
+                IS NULL
+
+        ")
+        ->fetchColumn();
 
 
 /* =========================================================
-   MEDICATION GIVEN TODAY
+   TOTAL SCHEDULED TODAY
+
+   This remains TODAY only.
 ========================================================= */
 
-$deliveredToday = $conn->query("
+$scheduledToday =
+    (int)$conn
+        ->query("
 
-    SELECT COUNT(*)
+            SELECT
+                COUNT(*)
 
-    FROM SYARMIMI.MEDICATION_ADMIN
+            FROM
+                SYARMIMI.MEDICATION_SCHEDULE MS
 
-    WHERE TRUNC(ADMIN_TIME) = TRUNC(SYSDATE)
+            JOIN
+                SYARMIMI.MEDICATION_ORDER MO
 
-")->fetchColumn();
+                ON
+                    MS.MEDORDER_ID =
+                    MO.MEDORDER_ID
+
+            JOIN
+                SYARMIMI.ADMISSION A
+
+                ON
+                    MO.ADMISSION_ID =
+                    A.ADMISSION_ID
+
+            WHERE
+                A.DISCHARGE_DATE
+                IS NULL
+
+            AND
+                TRUNC(
+                    MS.SCHEDULE_DATE
+                )
+                =
+                TRUNC(
+                    SYSDATE
+                )
+
+            AND
+                UPPER(
+                    TRIM(
+                        NVL(
+                            MS.STATUS,
+                            'Pending Preparation'
+                        )
+                    )
+                )
+                NOT IN
+                (
+                    'CANCELLED',
+                    'CANCELLED - DISCHARGED'
+                )
+
+        ")
+        ->fetchColumn();
 
 
 /* =========================================================
-   GET ALL WARDS
+   WARD LIST
 ========================================================= */
 
-$wardStmt = $conn->query("
+$wardStmt =
+    $conn->query("
 
-    SELECT DISTINCT WARD_NAME
+        SELECT DISTINCT
+            WARD_NAME
 
-    FROM SYARMIMI.WARD
+        FROM
+            SYARMIMI.WARD
 
-    WHERE WARD_NAME IS NOT NULL
+        WHERE
+            WARD_NAME
+            IS NOT NULL
 
-    ORDER BY WARD_NAME
+        ORDER BY
+            WARD_NAME
 
-");
+    ");
 
-$wards = $wardStmt->fetchAll(PDO::FETCH_COLUMN);
+
+$wards =
+    $wardStmt->fetchAll(
+        PDO::FETCH_COLUMN
+    );
 
 ?>
 
 <!DOCTYPE html>
 
-<html>
+<html lang="en">
 
 <head>
 
 <meta charset="UTF-8">
 
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+>
 
-<title>Medication Administration | ZB-CARE</title>
+<title>
+Medication Administration | ZB-CARE
+</title>
 
-
-<!-- Bootstrap -->
 
 <link
-href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
-rel="stylesheet">
+    href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
+    rel="stylesheet"
+>
 
-
-<!-- Bootstrap Icons -->
 
 <link
-href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css"
-rel="stylesheet">
+    href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css"
+    rel="stylesheet"
+>
 
-
-<!-- SweetAlert -->
 
 <script
-src="https://cdn.jsdelivr.net/npm/sweetalert2@11">
+    src="https://cdn.jsdelivr.net/npm/sweetalert2@11">
 </script>
 
 
 <style>
 
 /* =========================================================
-   BODY
+   ROOT
 ========================================================= */
 
-body {
+:root{
 
-    background: #f5f7fa;
+    --bg:#f6f8fb;
+
+    --surface:#ffffff;
+
+    --border:#e6eaf0;
+
+    --text:#172033;
+
+    --muted:#8792a5;
+
+    --primary:#2563eb;
+
+    --primary-soft:#eff6ff;
+
+    --success:#16803d;
+
+    --success-soft:#ecfdf3;
+
+    --warning:#b45309;
+
+    --warning-soft:#fff7ed;
+
+    --danger:#dc2626;
+
+    --danger-soft:#fef2f2;
+
+    --purple:#7c3aed;
+
+    --purple-soft:#f5f3ff;
+
+}
+
+
+/* =========================================================
+   GLOBAL
+========================================================= */
+
+*{
+    box-sizing:border-box;
+}
+
+
+body{
+
+    margin:0;
+
+    background:
+        var(--bg);
+
+    color:
+        var(--text);
 
     font-family:
+        "Segoe UI",
         Arial,
-        Helvetica,
         sans-serif;
 
 }
 
 
 /* =========================================================
-   MAIN CONTENT
+   SIDEBAR
 ========================================================= */
 
-.main-content {
+.sidebar{
 
-    margin-left: 260px;
+    width:260px !important;
 
-    padding: 30px;
+    min-width:260px !important;
 
-    min-height: 100vh;
+    max-width:260px !important;
 
 }
 
 
 /* =========================================================
-   PAGE HEADER
+   MAIN
 ========================================================= */
 
-.page-header {
+.main-content{
+
+    margin-left:260px;
+
+    min-height:100vh;
+
+    padding:
+        28px 30px 45px;
+
+}
+
+
+/* =========================================================
+   HEADER
+========================================================= */
+
+.page-header{
+
+    display:flex;
+
+    justify-content:space-between;
+
+    align-items:flex-start;
+
+    gap:20px;
+
+    margin-bottom:23px;
+
+}
+
+
+.page-title-wrap{
+
+    display:flex;
+
+    align-items:flex-start;
+
+    gap:13px;
+
+}
+
+
+.page-icon{
+
+    width:47px;
+
+    height:47px;
+
+    min-width:47px;
+
+    display:grid;
+
+    place-items:center;
+
+    border-radius:12px;
 
     background:
-        linear-gradient(
-            135deg,
-            #92400e,
-            #b45309
-        );
+        var(--success-soft);
 
-    color: white;
+    color:
+        var(--success);
 
-    padding: 28px 30px;
-
-    border-radius: 20px;
-
-    margin-bottom: 25px;
-
-    box-shadow:
-        0 8px 25px
-        rgba(0,0,0,0.10);
+    font-size:21px;
 
 }
 
 
-.page-header h3 {
+.page-title{
 
-    margin: 0;
+    margin:0;
 
-    font-weight: 700;
+    color:#111827;
+
+    font-size:28px;
+
+    font-weight:750;
+
+    letter-spacing:-.4px;
 
 }
 
 
-.page-header p {
+.page-subtitle{
 
-    margin: 7px 0 0;
+    margin-top:5px;
 
-    opacity: .9;
+    color:
+        var(--muted);
+
+    font-size:13px;
 
 }
 
 
 /* =========================================================
-   PDF BUTTON
+   DATE
 ========================================================= */
 
-.pdf-btn {
+.date-chip{
 
-    border-radius: 11px;
+    display:inline-flex;
 
-    padding: 10px 18px;
+    align-items:center;
 
-    font-weight: 600;
+    gap:7px;
 
-    border: none;
+    padding:
+        9px 12px;
+
+    border:
+        1px solid var(--border);
+
+    border-radius:9px;
+
+    background:#fff;
+
+    color:#64748b;
+
+    font-size:12px;
+
+    font-weight:600;
 
 }
 
@@ -497,92 +2063,179 @@ body {
    STAT CARDS
 ========================================================= */
 
-.stat-card {
+.stat-card{
 
-    background: white;
+    min-height:132px;
 
-    border-radius: 18px;
+    padding:19px;
 
-    padding: 23px;
+    background:
+        var(--surface);
 
-    border: none;
+    border:
+        1px solid var(--border);
 
-    box-shadow:
-        0 5px 18px
-        rgba(0,0,0,.06);
+    border-radius:13px;
 
-    height: 100%;
-
-    transition: .2s;
+    transition:.2s;
 
 }
 
 
-.stat-card:hover {
+.stat-card:hover{
 
     transform:
-        translateY(-3px);
+        translateY(-2px);
 
-    box-shadow:
-        0 9px 24px
-        rgba(0,0,0,.09);
+    border-color:#d6dce5;
 
 }
 
 
-.stat-icon {
+.stat-top{
 
-    width: 52px;
+    display:flex;
 
-    height: 52px;
+    justify-content:space-between;
 
-    border-radius: 14px;
+    align-items:flex-start;
 
-    display: flex;
-
-    align-items: center;
-
-    justify-content: center;
-
-    font-size: 23px;
-
-    margin-bottom: 13px;
+    gap:15px;
 
 }
 
 
-.icon-pending {
+.stat-label{
 
-    background: #fee2e2;
+    color:
+        var(--muted);
 
-    color: #dc2626;
+    font-size:12px;
 
-}
-
-
-.icon-delivered {
-
-    background: #dcfce7;
-
-    color: #16a34a;
+    font-weight:600;
 
 }
 
 
-.icon-ward {
+.stat-number{
 
-    background: #dbeafe;
+    margin-top:6px;
 
-    color: #2563eb;
+    color:#111827;
+
+    font-size:31px;
+
+    line-height:1;
+
+    font-weight:750;
 
 }
 
 
-.stat-card h2 {
+.stat-note{
 
-    font-weight: 700;
+    margin-top:10px;
 
-    margin: 3px 0 0;
+    color:#9aa4b5;
+
+    font-size:11px;
+
+}
+
+
+.stat-icon{
+
+    width:39px;
+
+    height:39px;
+
+    display:grid;
+
+    place-items:center;
+
+    border-radius:10px;
+
+    font-size:17px;
+
+}
+
+
+.icon-pending{
+
+    background:
+        var(--warning-soft);
+
+    color:
+        var(--warning);
+
+}
+
+
+.icon-given{
+
+    background:
+        var(--success-soft);
+
+    color:
+        var(--success);
+
+}
+
+
+.icon-schedule{
+
+    background:
+        var(--primary-soft);
+
+    color:
+        var(--primary);
+
+}
+
+
+.icon-ward{
+
+    background:
+        var(--purple-soft);
+
+    color:
+        var(--purple);
+
+}
+
+
+/* =========================================================
+   OVERDUE NOTICE
+========================================================= */
+
+.overdue-notice{
+
+    display:flex;
+
+    align-items:flex-start;
+
+    gap:9px;
+
+    margin-top:18px;
+
+    padding:12px 14px;
+
+    background:#fff7ed;
+
+    border:1px solid #fed7aa;
+
+    border-radius:10px;
+
+    color:#9a3412;
+
+    font-size:11px;
+
+}
+
+
+.overdue-notice strong{
+
+    font-weight:750;
 
 }
 
@@ -591,43 +2244,234 @@ body {
    FILTER
 ========================================================= */
 
-.filter-box {
+.filter-card{
 
-    background: white;
+    margin-top:21px;
 
-    padding: 22px;
+    padding:18px 20px;
 
-    border-radius: 18px;
+    background:#fff;
 
-    box-shadow:
-        0 5px 18px
-        rgba(0,0,0,.05);
+    border:
+        1px solid var(--border);
 
-    margin-bottom: 22px;
+    border-radius:13px;
+
+}
+
+
+.filter-header{
+
+    margin-bottom:14px;
+
+}
+
+
+.filter-title{
+
+    margin:0;
+
+    color:#1f2937;
+
+    font-size:15px;
+
+    font-weight:700;
+
+}
+
+
+.filter-description{
+
+    margin-top:3px;
+
+    color:
+        var(--muted);
+
+    font-size:11px;
+
+}
+
+
+.form-label{
+
+    margin-bottom:5px;
+
+    color:#64748b;
+
+    font-size:10px;
+
+    font-weight:700;
+
+    letter-spacing:.4px;
+
+    text-transform:uppercase;
 
 }
 
 
 .form-control,
-.form-select {
+.form-select{
 
-    border-radius: 12px;
+    min-height:41px;
 
-    min-height: 45px;
+    border:
+        1px solid #dfe4eb;
 
-    border-color: #d1d5db;
+    border-radius:9px;
+
+    font-size:12px;
 
 }
 
 
 .form-control:focus,
-.form-select:focus {
+.form-select:focus{
 
-    border-color: #b45309;
+    border-color:#93c5fd;
 
     box-shadow:
-        0 0 0 .2rem
-        rgba(180,83,9,.12);
+        0 0 0 3px
+        rgba(59,130,246,.08);
+
+}
+
+
+.filter-btn{
+
+    width:100%;
+
+    min-height:41px;
+
+    border:0;
+
+    border-radius:9px;
+
+    background:#172033;
+
+    color:white;
+
+    font-size:12px;
+
+    font-weight:650;
+
+}
+
+
+.filter-btn:hover{
+
+    background:#263146;
+
+}
+
+
+.reset-btn{
+
+    width:100%;
+
+    min-height:41px;
+
+    display:grid;
+
+    place-items:center;
+
+    border:
+        1px solid #e1e6ed;
+
+    border-radius:9px;
+
+    background:#fff;
+
+    color:#64748b;
+
+    text-decoration:none;
+
+}
+
+
+/* =========================================================
+   QUEUE
+========================================================= */
+
+.queue-card{
+
+    margin-top:21px;
+
+    overflow:hidden;
+
+    background:#fff;
+
+    border:
+        1px solid var(--border);
+
+    border-radius:13px;
+
+}
+
+
+.queue-header{
+
+    display:flex;
+
+    justify-content:space-between;
+
+    align-items:center;
+
+    gap:15px;
+
+    padding:
+        18px 20px;
+
+    border-bottom:
+        1px solid #edf0f3;
+
+}
+
+
+.queue-title{
+
+    margin:0;
+
+    font-size:16px;
+
+    font-weight:700;
+
+}
+
+
+.queue-description{
+
+    margin-top:3px;
+
+    color:
+        var(--muted);
+
+    font-size:11px;
+
+}
+
+
+.queue-badge{
+
+    display:inline-flex;
+
+    align-items:center;
+
+    gap:5px;
+
+    padding:
+        6px 9px;
+
+    border-radius:7px;
+
+    background:
+        var(--warning-soft);
+
+    color:
+        var(--warning);
+
+    font-size:11px;
+
+    font-weight:700;
 
 }
 
@@ -636,62 +2480,275 @@ body {
    TABLE
 ========================================================= */
 
-.table-box {
+.table{
 
-    background: white;
+    margin-bottom:0;
 
-    border-radius: 18px;
-
-    padding: 22px;
-
-    box-shadow:
-        0 5px 18px
-        rgba(0,0,0,.05);
+    vertical-align:middle;
 
 }
 
 
-.table {
+.table thead th{
 
-    margin-bottom: 0;
+    padding:
+        11px 13px;
 
-    vertical-align: middle;
+    border-bottom:
+        1px solid #e5e9ef;
 
-}
+    background:#f9fafb;
 
+    color:#687386;
 
-.table thead th {
+    font-size:10px;
 
-    background: #1f2937;
+    font-weight:750;
 
-    color: white;
+    letter-spacing:.3px;
 
-    border: none;
+    text-transform:uppercase;
 
-    padding: 14px;
-
-    white-space: nowrap;
-
-}
-
-
-.table tbody td {
-
-    padding: 15px 12px;
+    white-space:nowrap;
 
 }
 
 
-.table tbody tr {
+.table tbody td{
 
-    transition: .15s;
+    padding:
+        14px 13px;
+
+    border-color:#eef1f5;
+
+    color:#394456;
+
+    font-size:12px;
 
 }
 
 
-.table tbody tr:hover {
+.table tbody tr:hover td{
 
-    background: #fff7ed;
+    background:#fafcff;
+
+}
+
+
+.overdue-row td{
+
+    background:#fffdf9;
+
+}
+
+
+/* =========================================================
+   PATIENT
+========================================================= */
+
+.patient-box{
+
+    display:flex;
+
+    align-items:center;
+
+    gap:9px;
+
+}
+
+
+.patient-avatar{
+
+    width:34px;
+
+    height:34px;
+
+    min-width:34px;
+
+    display:grid;
+
+    place-items:center;
+
+    border-radius:9px;
+
+    background:
+        var(--primary-soft);
+
+    color:
+        var(--primary);
+
+}
+
+
+.patient-name{
+
+    color:#202939;
+
+    font-size:12px;
+
+    font-weight:700;
+
+}
+
+
+.patient-id{
+
+    margin-top:2px;
+
+    color:#9aa4b3;
+
+    font-size:9px;
+
+}
+
+
+/* =========================================================
+   MEDICATION
+========================================================= */
+
+.medication-box{
+
+    display:flex;
+
+    align-items:center;
+
+    gap:8px;
+
+}
+
+
+.medication-icon{
+
+    width:30px;
+
+    height:30px;
+
+    display:grid;
+
+    place-items:center;
+
+    border-radius:8px;
+
+    background:
+        var(--purple-soft);
+
+    color:
+        var(--purple);
+
+}
+
+
+.medication-name{
+
+    color:#263244;
+
+    font-weight:700;
+
+}
+
+
+/* =========================================================
+   LOCATION
+========================================================= */
+
+.location-main{
+
+    color:#394456;
+
+    font-size:11px;
+
+    font-weight:650;
+
+}
+
+
+.location-sub{
+
+    margin-top:3px;
+
+    color:#9aa4b3;
+
+    font-size:9px;
+
+}
+
+
+/* =========================================================
+   SCHEDULE
+========================================================= */
+
+.schedule-time{
+
+    display:inline-flex;
+
+    align-items:center;
+
+    gap:5px;
+
+    padding:
+        6px 9px;
+
+    border-radius:7px;
+
+    background:
+        var(--primary-soft);
+
+    color:
+        var(--primary);
+
+    font-size:11px;
+
+    font-weight:750;
+
+}
+
+
+.overdue-badge{
+
+    display:inline-flex;
+
+    align-items:center;
+
+    gap:4px;
+
+    margin-top:5px;
+
+    padding:
+        4px 7px;
+
+    border-radius:6px;
+
+    background:#fff7ed;
+
+    color:#c2410c;
+
+    font-size:9px;
+
+    font-weight:750;
+
+}
+
+
+.legacy-badge{
+
+    display:inline-flex;
+
+    align-items:center;
+
+    gap:5px;
+
+    padding:
+        5px 8px;
+
+    border-radius:7px;
+
+    background:#f3f4f6;
+
+    color:#64748b;
+
+    font-size:9px;
+
+    font-weight:700;
 
 }
 
@@ -700,45 +2757,44 @@ body {
    BADGES
 ========================================================= */
 
-.medication-badge {
+.soft-badge{
 
-    background: #ede9fe;
+    display:inline-flex;
 
-    color: #6d28d9;
+    align-items:center;
 
-    padding: 7px 12px;
+    gap:4px;
 
-    border-radius: 20px;
+    padding:
+        6px 9px;
 
-    font-weight: 600;
+    border-radius:7px;
 
-    display: inline-block;
+    font-size:10px;
 
-}
+    font-weight:700;
 
-
-.dosage-badge {
-
-    background: #dbeafe;
-
-    color: #1d4ed8;
-
-    padding: 6px 10px;
-
-    border-radius: 10px;
+    white-space:nowrap;
 
 }
 
 
-.frequency-badge {
+.dosage-badge{
 
-    background: #f3f4f6;
+    background:
+        var(--primary-soft);
 
-    color: #374151;
+    color:
+        var(--primary);
 
-    padding: 6px 10px;
+}
 
-    border-radius: 10px;
+
+.frequency-badge{
+
+    background:#f3f4f6;
+
+    color:#586476;
 
 }
 
@@ -747,32 +2803,42 @@ body {
    GIVE BUTTON
 ========================================================= */
 
-.give-btn {
+.give-btn{
 
-    border-radius: 10px;
+    display:inline-flex;
 
-    padding: 8px 15px;
+    align-items:center;
 
-    font-weight: 600;
+    justify-content:center;
 
-    border: none;
+    gap:5px;
 
-    background: #16a34a;
+    padding:
+        8px 11px;
 
-    color: white;
+    border:0;
 
-    cursor: pointer;
+    border-radius:8px;
 
-    transition: .2s;
+    background:
+        var(--success);
 
-    white-space: nowrap;
+    color:#fff;
+
+    font-size:10px;
+
+    font-weight:700;
+
+    transition:.2s;
+
+    white-space:nowrap;
 
 }
 
 
-.give-btn:hover {
+.give-btn:hover{
 
-    background: #15803d;
+    background:#126b34;
 
     transform:
         translateY(-1px);
@@ -780,17 +2846,24 @@ body {
 }
 
 
-.give-btn:active {
+/* =========================================================
+   LEGACY
+========================================================= */
 
-    transform:
-        translateY(0);
+.legacy-card{
+
+    margin-top:20px;
+
+    border-color:#e8eaee;
 
 }
 
 
-.give-btn i {
+.legacy-card .queue-badge{
 
-    margin-right: 4px;
+    background:#f3f4f6;
+
+    color:#64748b;
 
 }
 
@@ -799,55 +2872,249 @@ body {
    EMPTY STATE
 ========================================================= */
 
-.empty-box {
+.empty-state{
 
-    text-align: center;
+    padding:
+        50px 20px;
 
-    padding: 60px 20px;
-
-    color: #6b7280;
+    text-align:center;
 
 }
 
 
-.empty-box i {
+.empty-icon{
 
-    font-size: 55px;
+    width:52px;
 
-    color: #16a34a;
+    height:52px;
+
+    margin:
+        0 auto 11px;
+
+    display:grid;
+
+    place-items:center;
+
+    border-radius:50%;
+
+    background:
+        var(--success-soft);
+
+    color:
+        var(--success);
+
+    font-size:21px;
+
+}
+
+
+.empty-title{
+
+    color:#475569;
+
+    font-size:13px;
+
+    font-weight:700;
+
+}
+
+
+.empty-text{
+
+    margin-top:4px;
+
+    color:
+        var(--muted);
+
+    font-size:11px;
 
 }
 
 
 /* =========================================================
-   MODAL
+   SWEETALERT
 ========================================================= */
 
-.modal-content {
+.zb-popup{
 
-    border-radius: 18px;
+    border:0 !important;
 
-    border: none;
+    border-radius:18px !important;
 
     box-shadow:
-        0 15px 45px
-        rgba(0,0,0,.15);
+        0 30px 80px
+        rgba(15,23,42,.20) !important;
 
 }
 
 
-.modal-header {
+.zb-title{
+
+    color:#172033 !important;
+
+    font-size:19px !important;
+
+    font-weight:750 !important;
+
+}
+
+
+.zb-popup-icon{
+
+    width:58px;
+
+    height:58px;
+
+    margin:
+        5px auto 14px;
+
+    display:grid;
+
+    place-items:center;
+
+    border-radius:15px;
+
+    background:
+        var(--success-soft);
+
+    color:
+        var(--success);
+
+    font-size:24px;
+
+}
+
+
+.zb-med-info{
+
+    padding:15px;
+
+    border:
+        1px solid #e5e9ef;
+
+    border-radius:12px;
+
+    background:#f8fafc;
+
+    text-align:left;
+
+}
+
+
+.zb-row{
+
+    display:grid;
+
+    grid-template-columns:
+        115px 1fr;
+
+    gap:10px;
+
+    padding:7px 0;
 
     border-bottom:
-        1px solid #f1f1f1;
+        1px solid #edf0f3;
 
 }
 
 
-.modal-footer {
+.zb-row:last-child{
 
-    border-top:
-        1px solid #f1f1f1;
+    border-bottom:0;
+
+}
+
+
+.zb-label{
+
+    color:#8b96a8;
+
+    font-size:10px;
+
+    font-weight:700;
+
+    text-transform:uppercase;
+
+}
+
+
+.zb-value{
+
+    color:#253044;
+
+    font-size:12px;
+
+    font-weight:650;
+
+}
+
+
+.zb-warning{
+
+    display:flex;
+
+    align-items:flex-start;
+
+    gap:7px;
+
+    margin-top:13px;
+
+    padding:10px;
+
+    border:
+        1px solid #fde68a;
+
+    border-radius:8px;
+
+    background:#fffbeb;
+
+    color:#92400e;
+
+    font-size:10px;
+
+    line-height:1.45;
+
+}
+
+
+.zb-confirm{
+
+    padding:
+        10px 16px !important;
+
+    border:0 !important;
+
+    border-radius:8px !important;
+
+    background:
+        var(--success) !important;
+
+    color:white !important;
+
+    font-size:11px !important;
+
+    font-weight:700 !important;
+
+}
+
+
+.zb-cancel{
+
+    padding:
+        10px 16px !important;
+
+    border:
+        1px solid #e1e5eb !important;
+
+    border-radius:8px !important;
+
+    background:#f8fafc !important;
+
+    color:#64748b !important;
+
+    font-size:11px !important;
+
+    font-weight:700 !important;
 
 }
 
@@ -856,13 +3123,20 @@ body {
    RESPONSIVE
 ========================================================= */
 
-@media(max-width: 992px) {
+@media(max-width:1000px){
 
-    .main-content {
+    .main-content{
 
-        margin-left: 0;
+        margin-left:260px;
 
-        padding: 20px;
+        padding:20px;
+
+    }
+
+
+    .page-header{
+
+        flex-direction:column;
 
     }
 
@@ -876,18 +3150,16 @@ body {
 <body>
 
 
-<!-- =====================================================
-     SIDEBAR
-===================================================== -->
+<?php
 
-<?php include("../includes/sidebar_nurse.php"); ?>
+include(
+    "../includes/sidebar_nurse.php"
+);
+
+?>
 
 
-<!-- =====================================================
-     MAIN CONTENT
-===================================================== -->
-
-<div class="main-content">
+<main class="main-content">
 
 
 <!-- =====================================================
@@ -896,51 +3168,50 @@ body {
 
 <div class="page-header">
 
-    <div
-    class="d-flex
-    justify-content-between
-    align-items-center
-    flex-wrap
-    gap-3">
+
+<div class="page-title-wrap">
 
 
-        <div>
+<div class="page-icon">
 
-            <h3>
+<i class="bi bi-capsule-pill"></i>
 
-                <i class="bi bi-capsule"></i>
-
-                Medication Administration
-
-            </h3>
+</div>
 
 
-            <p>
-
-                Manage and record medication given
-                to admitted patients.
-
-            </p>
-
-        </div>
+<div>
 
 
-        <!-- PDF -->
+<h1 class="page-title">
 
-        <button
-        type="button"
-        class="btn btn-light pdf-btn"
-        data-bs-toggle="modal"
-        data-bs-target="#pdfModal">
+Medication Administration
 
-            <i class="bi bi-file-earmark-pdf text-danger"></i>
-
-            Generate PDF
-
-        </button>
+</h1>
 
 
-    </div>
+<div class="page-subtitle">
+
+Administer prepared medication doses according to each patient's prescribed schedule.
+
+</div>
+
+
+</div>
+
+
+</div>
+
+
+<div class="date-chip">
+
+<i class="bi bi-calendar3"></i>
+
+<?= strtoupper(
+    date('d M Y')
+) ?>
+
+</div>
+
 
 </div>
 
@@ -949,110 +3220,284 @@ body {
      STATISTICS
 ===================================================== -->
 
-<div class="row g-4 mb-4">
+<div class="row g-3">
 
 
-    <!-- PENDING -->
-
-    <div class="col-md-4">
-
-        <div class="stat-card">
-
-            <div class="stat-icon icon-pending">
-
-                <i class="bi bi-hourglass-split"></i>
-
-            </div>
+<div class="col-xl-3 col-md-6">
 
 
-            <small class="text-muted">
-
-                Pending Medication
-
-            </small>
+<div class="stat-card">
 
 
-            <h2>
-
-                <?= (int)$pendingCount ?>
-
-            </h2>
-
-        </div>
-
-    </div>
+<div class="stat-top">
 
 
-    <!-- GIVEN TODAY -->
-
-    <div class="col-md-4">
-
-        <div class="stat-card">
-
-            <div class="stat-icon icon-delivered">
-
-                <i class="bi bi-check-circle"></i>
-
-            </div>
+<div>
 
 
-            <small class="text-muted">
+<div class="stat-label">
 
-                Given Today
+Ready to Give
 
-            </small>
-
-
-            <h2>
-
-                <?= (int)$deliveredToday ?>
-
-            </h2>
-
-        </div>
-
-    </div>
+</div>
 
 
-    <!-- ACTIVE WARDS -->
+<div class="stat-number">
 
-    <div class="col-md-4">
+<?= $pendingCount ?>
 
-        <div class="stat-card">
-
-            <div class="stat-icon icon-ward">
-
-                <i class="bi bi-hospital"></i>
-
-            </div>
+</div>
 
 
-            <small class="text-muted">
-
-                Active Wards
-
-            </small>
+</div>
 
 
-            <h2>
+<div class="stat-icon icon-pending">
 
-                <?= (int)$wardCount ?>
+<i class="bi bi-hourglass-split"></i>
 
-            </h2>
+</div>
 
-        </div>
 
-    </div>
+</div>
+
+
+<div class="stat-note">
+
+Prepared or collected doses waiting for nurse administration.
+
+</div>
+
+
+</div>
+
+
+</div>
+
+
+<div class="col-xl-3 col-md-6">
+
+
+<div class="stat-card">
+
+
+<div class="stat-top">
+
+
+<div>
+
+
+<div class="stat-label">
+
+Given Today
+
+</div>
+
+
+<div class="stat-number">
+
+<?= $givenToday ?>
+
+</div>
+
+
+</div>
+
+
+<div class="stat-icon icon-given">
+
+<i class="bi bi-check2-circle"></i>
+
+</div>
+
+
+</div>
+
+
+<div class="stat-note">
+
+Dose administration records created today.
+
+</div>
+
+
+</div>
+
+
+</div>
+
+
+<div class="col-xl-3 col-md-6">
+
+
+<div class="stat-card">
+
+
+<div class="stat-top">
+
+
+<div>
+
+
+<div class="stat-label">
+
+Scheduled Today
+
+</div>
+
+
+<div class="stat-number">
+
+<?= $scheduledToday ?>
+
+</div>
+
+
+</div>
+
+
+<div class="stat-icon icon-schedule">
+
+<i class="bi bi-clock-history"></i>
+
+</div>
+
+
+</div>
+
+
+<div class="stat-note">
+
+Total active inpatient medication doses scheduled today.
+
+</div>
+
+
+</div>
+
+
+</div>
+
+
+<div class="col-xl-3 col-md-6">
+
+
+<div class="stat-card">
+
+
+<div class="stat-top">
+
+
+<div>
+
+
+<div class="stat-label">
+
+Active Wards
+
+</div>
+
+
+<div class="stat-number">
+
+<?= $wardCount ?>
+
+</div>
+
+
+</div>
+
+
+<div class="stat-icon icon-ward">
+
+<i class="bi bi-hospital"></i>
+
+</div>
+
+
+</div>
+
+
+<div class="stat-note">
+
+Wards currently accommodating admitted patients.
+
+</div>
+
+
+</div>
+
+
+</div>
 
 
 </div>
 
 
 <!-- =====================================================
+     OVERDUE NOTICE
+===================================================== -->
+
+<?php if (
+    $overdueCount > 0
+): ?>
+
+
+<div class="overdue-notice">
+
+
+<i class="bi bi-exclamation-triangle-fill"></i>
+
+
+<div>
+
+
+<strong>
+
+<?= $overdueCount ?>
+
+overdue prepared dose(s)
+
+</strong>
+
+are still waiting for administration.
+
+These doses were prepared or collected previously but were not recorded as administered.
+
+</div>
+
+
+</div>
+
+
+<?php endif; ?>
+
+
+<!-- =====================================================
      FILTER
 ===================================================== -->
 
-<div class="filter-box">
+<div class="filter-card">
+
+
+<div class="filter-header">
+
+
+<h5 class="filter-title">
+
+Medication Queue Filter
+
+</h5>
+
+
+<div class="filter-description">
+
+Search by patient, medication, ward or admission number.
+
+</div>
+
+
+</div>
 
 
 <form method="GET">
@@ -1061,140 +3506,193 @@ body {
 <div class="row g-3 align-items-end">
 
 
-    <!-- SEARCH -->
-
-    <div class="col-md-4">
-
-        <label class="form-label fw-semibold">
-
-            Search
-
-        </label>
+<div class="col-lg-4">
 
 
-        <input
-        type="text"
-        name="search"
-        class="form-control"
-        placeholder="Search patient, medication or admission..."
-        value="<?= htmlspecialchars($search) ?>">
+<label class="form-label">
 
-    </div>
+Search
+
+</label>
 
 
-    <!-- WARD -->
-
-    <div class="col-md-3">
-
-        <label class="form-label fw-semibold">
-
-            Ward
-
-        </label>
+<input
+    type="text"
+    name="search"
+    class="form-control"
+    placeholder="Search patient or medication..."
+    value="<?= h($search) ?>"
+>
 
 
-        <select
-        name="ward"
-        class="form-select">
+</div>
 
 
-            <option value="">
-
-                All Wards
-
-            </option>
+<div class="col-lg-3">
 
 
-            <?php foreach($wards as $ward): ?>
+<label class="form-label">
 
-                <option
-                value="<?= htmlspecialchars($ward) ?>"
-                <?= ($wardFilter === $ward)
-                    ? 'selected'
-                    : '' ?>>
+Ward
 
-                    <?= htmlspecialchars($ward) ?>
-
-                </option>
-
-            <?php endforeach; ?>
+</label>
 
 
-        </select>
-
-    </div>
-
-
-    <!-- SORT -->
-
-    <div class="col-md-3">
-
-        <label class="form-label fw-semibold">
-
-            Sort By
-
-        </label>
+<select
+    name="ward"
+    class="form-select"
+>
 
 
-        <select
-        name="sort"
-        class="form-select">
+<option value="">
+
+All Wards
+
+</option>
 
 
-            <option
-            value="newest"
-            <?= ($sort === 'newest')
-                ? 'selected'
-                : '' ?>>
-
-                Newest First
-
-            </option>
+<?php foreach (
+    $wards
+    as
+    $ward
+): ?>
 
 
-            <option
-            value="patient"
-            <?= ($sort === 'patient')
-                ? 'selected'
-                : '' ?>>
+<option
+    value="<?= h($ward) ?>"
 
-                Patient Name
+    <?= (
+        $wardFilter
+        ===
+        $ward
+    )
+        ?
+        'selected'
+        :
+        ''
+    ?>
+>
 
-            </option>
+<?= h($ward) ?>
 
-
-            <option
-            value="ward"
-            <?= ($sort === 'ward')
-                ? 'selected'
-                : '' ?>>
-
-                Ward Name
-
-            </option>
+</option>
 
 
-        </select>
-
-    </div>
+<?php endforeach; ?>
 
 
-    <!-- APPLY -->
+</select>
 
-    <div class="col-md-2">
 
-        <button
-        type="submit"
-        class="btn btn-dark w-100"
-        style="border-radius:12px; min-height:45px;">
+</div>
 
-            <i class="bi bi-funnel"></i>
 
-            Apply
+<div class="col-lg-3">
 
-        </button>
 
-    </div>
+<label class="form-label">
+
+Sort By
+
+</label>
+
+
+<select
+    name="sort"
+    class="form-select"
+>
+
+
+<option
+    value="time"
+    <?= $sort === 'time'
+        ? 'selected'
+        : ''
+    ?>
+>
+
+Scheduled Time
+
+</option>
+
+
+<option
+    value="patient"
+    <?= $sort === 'patient'
+        ? 'selected'
+        : ''
+    ?>
+>
+
+Patient Name
+
+</option>
+
+
+<option
+    value="ward"
+    <?= $sort === 'ward'
+        ? 'selected'
+        : ''
+    ?>
+>
+
+Ward
+
+</option>
+
+
+<option
+    value="medication"
+    <?= $sort === 'medication'
+        ? 'selected'
+        : ''
+    ?>
+>
+
+Medication
+
+</option>
+
+
+</select>
+
+
+</div>
+
+
+<div class="col-lg-1">
+
+
+<button
+    type="submit"
+    class="filter-btn"
+    title="Apply Filter"
+>
+
+<i class="bi bi-funnel"></i>
+
+</button>
+
+
+</div>
+
+
+<div class="col-lg-1">
+
+
+<a
+    href="nurse_medication.php"
+    class="reset-btn"
+    title="Reset Filter"
+>
+
+<i class="bi bi-arrow-counterclockwise"></i>
+
+</a>
+
+
+</div>
 
 
 </div>
@@ -1207,47 +3705,44 @@ body {
 
 
 <!-- =====================================================
-     MEDICATION QUEUE
+     READY MEDICATION DOSES
 ===================================================== -->
 
-<div class="table-box">
+<div class="queue-card">
 
 
-<div
-class="d-flex
-justify-content-between
-align-items-center
-mb-3
-flex-wrap
-gap-2">
+<div class="queue-header">
 
 
-    <div>
-
-        <h5 class="fw-bold mb-1">
-
-            Medication Queue
-
-        </h5>
+<div>
 
 
-        <small class="text-muted">
+<h5 class="queue-title">
 
-            Prepared medications waiting
-            to be administered.
+Ready Medication Doses
 
-        </small>
-
-    </div>
+</h5>
 
 
-    <span class="badge bg-danger fs-6">
+<div class="queue-description">
 
-        <?= count($rows) ?>
+Today's prepared/collected doses and overdue doses waiting for administration.
 
-        Pending
+</div>
 
-    </span>
+
+</div>
+
+
+<span class="queue-badge">
+
+<i class="bi bi-clock"></i>
+
+<?= count($rows) ?>
+
+Ready
+
+</span>
 
 
 </div>
@@ -1256,30 +3751,48 @@ gap-2">
 <div class="table-responsive">
 
 
-<table class="table table-hover">
+<table class="table">
 
 
 <thead>
 
+
 <tr>
 
-    <th>Patient</th>
+<th>
+Patient
+</th>
 
-    <th>Location</th>
+<th>
+Location
+</th>
 
-    <th>Medication</th>
+<th>
+Medication
+</th>
 
-    <th>Dosage</th>
+<th>
+Dosage
+</th>
 
-    <th>Frequency</th>
+<th>
+Frequency
+</th>
 
-    <th class="text-center">
+<th>
+Scheduled
+</th>
 
-        Action
+<th>
+Status
+</th>
 
-    </th>
+<th class="text-center">
+Action
+</th>
 
 </tr>
+
 
 </thead>
 
@@ -1287,228 +3800,432 @@ gap-2">
 <tbody>
 
 
-<?php if(count($rows) > 0): ?>
+<?php if (
+    count($rows) > 0
+): ?>
 
 
-    <?php foreach($rows as $row): ?>
+<?php foreach (
+    $rows
+    as
+    $row
+): ?>
 
 
-    <tr>
+<?php
 
+$isOverdue =
+    (int)(
+        $row[
+            'IS_OVERDUE'
+        ]
+        ?? 0
+    )
+    === 1;
 
-        <!-- PATIENT -->
 
-        <td>
+$prepStatusText =
+    trim(
+        $row[
+            'PREPARATION_STATUS'
+        ]
+        ?? ''
+    );
 
-            <div class="fw-bold">
+?>
 
-                <?= htmlspecialchars(
-                    $row['NAME']
-                ) ?>
 
-            </div>
+<tr
+    class="<?= $isOverdue
+        ? 'overdue-row'
+        : ''
+    ?>"
+>
 
 
-            <small class="text-muted">
+<!-- PATIENT -->
 
-                Admission #
+<td>
 
-                <?= htmlspecialchars(
-                    $row['ADMISSION_ID']
-                ) ?>
 
-            </small>
+<div class="patient-box">
 
-        </td>
 
+<div class="patient-avatar">
 
-        <!-- LOCATION -->
+<i class="bi bi-person-fill"></i>
 
-        <td>
+</div>
 
-            <?php if(!empty($row['WARD_NAME'])): ?>
 
-                <strong>
+<div>
 
-                    <?= htmlspecialchars(
-                        $row['WARD_NAME']
-                    ) ?>
 
-                </strong>
+<div class="patient-name">
 
-            <?php else: ?>
+<?= h(
+    $row['NAME']
+) ?>
 
-                <span class="text-danger">
+</div>
 
-                    No Ward
 
-                </span>
+<div class="patient-id">
 
-            <?php endif; ?>
+Admission #
 
+<?= h(
+    $row[
+        'ADMISSION_ID'
+    ]
+) ?>
 
-            <br>
+</div>
 
 
-            <small class="text-muted">
+</div>
 
-                Bed
 
-                <?= htmlspecialchars(
-                    $row['BED_NUMBER'] ?? '-'
-                ) ?>
+</div>
 
-            </small>
 
-        </td>
+</td>
 
 
-        <!-- MEDICATION -->
+<!-- LOCATION -->
 
-        <td>
+<td>
 
-            <span class="medication-badge">
 
-                <i class="bi bi-capsule"></i>
+<div class="location-main">
 
-                <?= htmlspecialchars(
-                    $row['MEDICATION_NAME']
-                ) ?>
+<i class="bi bi-hospital me-1"></i>
 
-            </span>
+<?= h(
+    $row[
+        'WARD_NAME'
+    ]
+    ?? '-'
+) ?>
 
-        </td>
+</div>
 
 
-        <!-- DOSAGE -->
+<div class="location-sub">
 
-        <td>
+Bed
 
-            <span class="dosage-badge">
+<?= h(
+    $row[
+        'BED_NUMBER'
+    ]
+    ?? '-'
+) ?>
 
-                <?= htmlspecialchars(
-                    $row['DOSAGE']
-                ) ?>
+</div>
 
-            </span>
 
-        </td>
+</td>
 
 
-        <!-- FREQUENCY -->
+<!-- MEDICATION -->
 
-        <td>
+<td>
 
-            <span class="frequency-badge">
 
-                <?= htmlspecialchars(
-                    $row['FREQUENCY']
-                ) ?>
+<div class="medication-box">
 
-            </span>
 
-        </td>
+<div class="medication-icon">
 
+<i class="bi bi-capsule"></i>
 
-        <!-- ACTION -->
+</div>
 
-        <td class="text-center">
 
+<div class="medication-name">
 
-            <form
-            method="POST"
-            class="giveForm d-inline"
+<?= h(
+    $row[
+        'MEDICATION_NAME'
+    ]
+) ?>
 
-            data-patient="<?= htmlspecialchars(
-                $row['NAME'],
-                ENT_QUOTES
-            ) ?>"
+</div>
 
-            data-medication="<?= htmlspecialchars(
-                $row['MEDICATION_NAME'],
-                ENT_QUOTES
-            ) ?>"
 
-            data-dosage="<?= htmlspecialchars(
-                $row['DOSAGE'],
-                ENT_QUOTES
-            ) ?>"
+</div>
 
-            data-frequency="<?= htmlspecialchars(
-                $row['FREQUENCY'],
-                ENT_QUOTES
-            ) ?>">
 
+</td>
 
-                <input
-                type="hidden"
-                name="medorder_id"
-                value="<?= (int)$row['MEDORDER_ID'] ?>">
 
+<!-- DOSAGE -->
 
-                <input
-                type="hidden"
-                name="give_medication"
-                value="1">
+<td>
 
 
-                <button
-                type="button"
-                class="give-btn giveMedicationBtn">
+<span class="soft-badge dosage-badge">
 
-                    <i class="bi bi-capsule"></i>
+<?= h(
+    $row[
+        'DOSAGE'
+    ]
+) ?>
 
-                    Give Medication
+</span>
 
-                </button>
 
+</td>
 
-            </form>
 
+<!-- FREQUENCY -->
 
-        </td>
+<td>
 
 
-    </tr>
+<span class="soft-badge frequency-badge">
 
+<?= h(
+    $row[
+        'FREQUENCY'
+    ]
+) ?>
 
-    <?php endforeach; ?>
+</span>
+
+
+</td>
+
+
+<!-- SCHEDULE -->
+
+<td>
+
+
+<span class="schedule-time">
+
+<i class="bi bi-clock"></i>
+
+<?= h(
+    $row[
+        'SCHEDULE_TIME'
+    ]
+) ?>
+
+</span>
+
+
+<div class="location-sub mt-1">
+
+<?= h(
+    $row[
+        'SCHEDULE_DATE_DISPLAY'
+    ]
+) ?>
+
+</div>
+
+
+<?php if ($isOverdue): ?>
+
+
+<div class="overdue-badge">
+
+<i class="bi bi-exclamation-circle"></i>
+
+Overdue
+
+</div>
+
+
+<?php endif; ?>
+
+
+</td>
+
+
+<!-- STATUS -->
+
+<td>
+
+
+<?php if (
+    strtoupper(
+        $prepStatusText
+    )
+    ===
+    'COLLECTED'
+): ?>
+
+
+<span
+    class="soft-badge"
+    style="
+        background:#ecfeff;
+        color:#0e7490;
+    "
+>
+
+<i class="bi bi-person-check"></i>
+
+Collected by Nurse
+
+</span>
 
 
 <?php else: ?>
 
 
-    <tr>
+<span
+    class="soft-badge"
+    style="
+        background:#ecfdf5;
+        color:#15803d;
+    "
+>
 
-        <td colspan="6">
+<i class="bi bi-check-circle"></i>
 
+Ready for Nurse
 
-            <div class="empty-box">
-
-                <i class="bi bi-check-circle"></i>
-
-
-                <h5 class="mt-3 fw-bold">
-
-                    No Pending Medication
-
-                </h5>
+</span>
 
 
-                <p class="mb-0">
-
-                    All prepared medications
-                    have been administered.
-
-                </p>
+<?php endif; ?>
 
 
-            </div>
+</td>
 
 
-        </td>
+<!-- ACTION -->
 
-    </tr>
+<td class="text-center">
+
+
+<form
+    method="POST"
+    class="giveDoseForm d-inline"
+
+    data-patient="<?= h(
+        $row['NAME']
+    ) ?>"
+
+    data-medication="<?= h(
+        $row[
+            'MEDICATION_NAME'
+        ]
+    ) ?>"
+
+    data-dosage="<?= h(
+        $row[
+            'DOSAGE'
+        ]
+    ) ?>"
+
+    data-frequency="<?= h(
+        $row[
+            'FREQUENCY'
+        ]
+    ) ?>"
+
+    data-time="<?= h(
+        $row[
+            'SCHEDULE_TIME'
+        ]
+    ) ?>"
+
+    data-date="<?= h(
+        $row[
+            'SCHEDULE_DATE_DISPLAY'
+        ]
+    ) ?>"
+
+    data-overdue="<?= $isOverdue
+        ? '1'
+        : '0'
+    ?>"
+>
+
+
+<input
+    type="hidden"
+    name="schedule_id"
+    value="<?= (int)$row['SCHEDULE_ID'] ?>"
+>
+
+
+<input
+    type="hidden"
+    name="give_schedule"
+    value="1"
+>
+
+
+<button
+    type="button"
+    class="give-btn giveDoseBtn"
+>
+
+<i class="bi bi-check2-circle"></i>
+
+Give Dose
+
+</button>
+
+
+</form>
+
+
+</td>
+
+
+</tr>
+
+
+<?php endforeach; ?>
+
+
+<?php else: ?>
+
+
+<tr>
+
+
+<td colspan="8">
+
+
+<div class="empty-state">
+
+
+<div class="empty-icon">
+
+<i class="bi bi-check-lg"></i>
+
+</div>
+
+
+<div class="empty-title">
+
+No Prepared Doses Waiting
+
+</div>
+
+
+<div class="empty-text">
+
+There are currently no prepared or collected medication doses waiting for administration.
+
+</div>
+
+
+</div>
+
+
+</td>
+
+
+</tr>
 
 
 <?php endif; ?>
@@ -1526,131 +4243,147 @@ gap-2">
 </div>
 
 
-</div>
-
-
 <!-- =====================================================
-     PDF DATE MODAL
+     LEGACY MEDICATION
 ===================================================== -->
 
-<div
-class="modal fade"
-id="pdfModal"
-tabindex="-1"
-aria-hidden="true">
+<?php if (
+    count($legacyRows) > 0
+): ?>
 
 
-<div
-class="modal-dialog modal-dialog-centered">
+<div class="queue-card legacy-card">
 
 
-<div
-class="modal-content">
+<div class="queue-header">
 
 
-    <div class="modal-header">
-
-        <h5 class="modal-title fw-bold">
-
-            <i class="bi bi-file-earmark-pdf text-danger"></i>
-
-            Generate Medication Report
-
-        </h5>
+<div>
 
 
-        <button
-        type="button"
-        class="btn-close"
-        data-bs-dismiss="modal">
-        </button>
+<h5 class="queue-title">
 
-    </div>
+Previous Medication Records
+
+</h5>
 
 
-    <form
-    method="GET"
-    action="nurse_medication_report.php"
-    target="_blank">
+<div class="queue-description">
+
+Prepared inpatient medication created before scheduled-dose tracking was introduced.
+
+</div>
 
 
-        <div class="modal-body">
+</div>
 
 
-            <div
-            class="text-center mb-3"
-            style="font-size:45px;">
+<span class="queue-badge">
 
-                📄
+<i class="bi bi-clock-history"></i>
 
-            </div>
+<?= count($legacyRows) ?>
 
+Legacy
 
-            <p class="text-muted text-center">
-
-                Select the date you want
-                to include in the medication report.
-
-            </p>
+</span>
 
 
-            <label class="form-label fw-semibold">
-
-                Report Date
-
-            </label>
+</div>
 
 
-            <input
-            type="date"
-            name="date"
-            class="form-control"
-            value="<?= date('Y-m-d') ?>"
-            required>
+<div class="table-responsive">
 
 
-            <div class="alert alert-info mt-3 mb-0">
-
-                <i class="bi bi-info-circle"></i>
-
-                The PDF will display all medication
-                administrations recorded on the selected date.
-
-            </div>
+<table class="table">
 
 
-        </div>
+<thead>
 
 
-        <div class="modal-footer">
+<tr>
+
+<th>
+Patient
+</th>
+
+<th>
+Location
+</th>
+
+<th>
+Medication
+</th>
+
+<th>
+Dosage
+</th>
+
+<th>
+Frequency
+</th>
+
+<th>
+Type
+</th>
+
+<th class="text-center">
+Action
+</th>
+
+</tr>
 
 
-            <button
-            type="button"
-            class="btn btn-secondary"
-            data-bs-dismiss="modal">
-
-                Cancel
-
-            </button>
+</thead>
 
 
-            <button
-            type="submit"
-            class="btn btn-danger">
-
-                <i class="bi bi-file-earmark-pdf"></i>
-
-                Generate PDF
-
-            </button>
+<tbody>
 
 
-        </div>
+<?php foreach (
+    $legacyRows
+    as
+    $row
+): ?>
 
 
-    </form>
+<tr>
 
+
+<td>
+
+
+<div class="patient-box">
+
+
+<div class="patient-avatar">
+
+<i class="bi bi-person-fill"></i>
+
+</div>
+
+
+<div>
+
+
+<div class="patient-name">
+
+<?= h(
+    $row['NAME']
+) ?>
+
+</div>
+
+
+<div class="patient-id">
+
+Admission #
+
+<?= h(
+    $row[
+        'ADMISSION_ID'
+    ]
+) ?>
 
 </div>
 
@@ -1661,9 +4394,193 @@ class="modal-content">
 </div>
 
 
-<!-- =====================================================
-     BOOTSTRAP JS
-===================================================== -->
+</td>
+
+
+<td>
+
+
+<div class="location-main">
+
+<?= h(
+    $row[
+        'WARD_NAME'
+    ]
+    ?? '-'
+) ?>
+
+</div>
+
+
+<div class="location-sub">
+
+Bed
+
+<?= h(
+    $row[
+        'BED_NUMBER'
+    ]
+    ?? '-'
+) ?>
+
+</div>
+
+
+</td>
+
+
+<td>
+
+
+<div class="medication-name">
+
+<?= h(
+    $row[
+        'MEDICATION_NAME'
+    ]
+) ?>
+
+</div>
+
+
+</td>
+
+
+<td>
+
+
+<span class="soft-badge dosage-badge">
+
+<?= h(
+    $row[
+        'DOSAGE'
+    ]
+) ?>
+
+</span>
+
+
+</td>
+
+
+<td>
+
+
+<span class="soft-badge frequency-badge">
+
+<?= h(
+    $row[
+        'FREQUENCY'
+    ]
+) ?>
+
+</span>
+
+
+</td>
+
+
+<td>
+
+
+<span class="legacy-badge">
+
+<i class="bi bi-archive"></i>
+
+Legacy Record
+
+</span>
+
+
+</td>
+
+
+<td class="text-center">
+
+
+<form
+    method="POST"
+    class="giveLegacyForm d-inline"
+
+    data-patient="<?= h(
+        $row['NAME']
+    ) ?>"
+
+    data-medication="<?= h(
+        $row[
+            'MEDICATION_NAME'
+        ]
+    ) ?>"
+
+    data-dosage="<?= h(
+        $row[
+            'DOSAGE'
+        ]
+    ) ?>"
+
+    data-frequency="<?= h(
+        $row[
+            'FREQUENCY'
+        ]
+    ) ?>"
+>
+
+
+<input
+    type="hidden"
+    name="medorder_id"
+    value="<?= (int)$row['MEDORDER_ID'] ?>"
+>
+
+
+<input
+    type="hidden"
+    name="give_legacy"
+    value="1"
+>
+
+
+<button
+    type="button"
+    class="give-btn giveLegacyBtn"
+>
+
+<i class="bi bi-check2-circle"></i>
+
+Give Medication
+
+</button>
+
+
+</form>
+
+
+</td>
+
+
+</tr>
+
+
+<?php endforeach; ?>
+
+
+</tbody>
+
+
+</table>
+
+
+</div>
+
+
+</div>
+
+
+<?php endif; ?>
+
+
+</main>
+
 
 <script
 src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js">
@@ -1672,195 +4589,435 @@ src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.j
 
 <script>
 
+
 /* =========================================================
-   GIVE MEDICATION CONFIRMATION
+   ESCAPE HTML
 ========================================================= */
 
-document
-.querySelectorAll('.giveMedicationBtn')
-.forEach(function(button) {
+function escapeHtml(value)
+{
+    const element =
+        document.createElement(
+            'div'
+        );
+
+    element.textContent =
+        value
+        ??
+        '';
+
+    return element.innerHTML;
+}
 
 
-    button.addEventListener(
-        'click',
-        function() {
+/* =========================================================
+   CONFIRM MEDICATION ADMINISTRATION
+========================================================= */
+
+function confirmMedicationAdministration(
+    form,
+    scheduled
+)
+{
+
+    const patient =
+        escapeHtml(
+            form.dataset.patient
+        );
 
 
-            const form =
-                this.closest('.giveForm');
+    const medication =
+        escapeHtml(
+            form.dataset.medication
+        );
 
 
-            const patient =
-                form.dataset.patient;
+    const dosage =
+        escapeHtml(
+            form.dataset.dosage
+        );
 
 
-            const medication =
-                form.dataset.medication;
+    const frequency =
+        escapeHtml(
+            form.dataset.frequency
+        );
 
 
-            const dosage =
-                form.dataset.dosage;
+    const time =
+        scheduled
+        ?
+        escapeHtml(
+            form.dataset.time
+        )
+        :
+        'Legacy Record';
 
 
-            const frequency =
-                form.dataset.frequency;
+    const scheduleDate =
+        scheduled
+        ?
+        escapeHtml(
+            form.dataset.date
+        )
+        :
+        '-';
 
 
-            Swal.fire({
-
-                title:
-                    'Give Medication?',
-
-
-                html:
-
-                    '<div style="' +
-                    'font-size:55px;' +
-                    'margin-bottom:10px;">' +
-                    '💊' +
-                    '</div>' +
-
-                    '<div style="' +
-                    'background:#f8fafc;' +
-                    'padding:15px;' +
-                    'border-radius:12px;' +
-                    'text-align:left;">' +
-
-                    '<p class="mb-2">' +
-                    '<strong>Patient</strong><br>' +
-                    patient +
-                    '</p>' +
-
-                    '<p class="mb-2">' +
-                    '<strong>Medication</strong><br>' +
-                    medication +
-                    '</p>' +
-
-                    '<p class="mb-2">' +
-                    '<strong>Dosage</strong><br>' +
-                    dosage +
-                    '</p>' +
-
-                    '<p class="mb-0">' +
-                    '<strong>Frequency</strong><br>' +
-                    frequency +
-                    '</p>' +
-
-                    '</div>',
+    const overdue =
+        scheduled
+        &&
+        form.dataset.overdue
+        ===
+        '1';
 
 
-                icon:
-                    'warning',
+    Swal.fire({
+
+        width:
+            500,
+
+        showCancelButton:
+            true,
+
+        reverseButtons:
+            true,
+
+        buttonsStyling:
+            false,
+
+        customClass:
+        {
+
+            popup:
+                'zb-popup',
+
+            title:
+                'zb-title',
+
+            confirmButton:
+                'zb-confirm',
+
+            cancelButton:
+                'zb-cancel'
+
+        },
 
 
-                showCancelButton:
-                    true,
+        title:
+
+            overdue
+
+            ?
+
+            'Confirm Overdue Dose'
+
+            :
+
+            (
+                scheduled
+
+                ?
+
+                'Confirm Scheduled Dose'
+
+                :
+
+                'Confirm Medication Administration'
+            ),
 
 
-                confirmButtonText:
-                    '<i class="bi bi-check-circle"></i> Yes, Give Medication',
+        html:
+        `
+
+            <div class="zb-popup-icon">
+
+                <i class="bi bi-capsule-pill"></i>
+
+            </div>
 
 
-                cancelButtonText:
-                    'Cancel',
+            <div class="zb-med-info">
 
 
-                confirmButtonColor:
-                    '#16a34a',
+                <div class="zb-row">
+
+                    <div class="zb-label">
+                        Patient
+                    </div>
+
+                    <div class="zb-value">
+                        ${patient}
+                    </div>
+
+                </div>
 
 
-                cancelButtonColor:
-                    '#6b7280',
+                <div class="zb-row">
+
+                    <div class="zb-label">
+                        Medication
+                    </div>
+
+                    <div class="zb-value">
+                        ${medication}
+                    </div>
+
+                </div>
 
 
-                reverseButtons:
-                    true,
+                <div class="zb-row">
+
+                    <div class="zb-label">
+                        Dosage
+                    </div>
+
+                    <div class="zb-value">
+                        ${dosage}
+                    </div>
+
+                </div>
 
 
-                focusCancel:
-                    true
+                <div class="zb-row">
 
-            })
+                    <div class="zb-label">
+                        Frequency
+                    </div>
 
+                    <div class="zb-value">
+                        ${frequency}
+                    </div>
 
-            .then(function(result) {
-
-
-                if(result.isConfirmed) {
-
-
-                    Swal.fire({
-
-                        title:
-                            'Recording Medication...',
-
-                        text:
-                            'Please wait.',
-
-                        allowOutsideClick:
-                            false,
-
-                        allowEscapeKey:
-                            false,
-
-                        didOpen:
-                            function() {
-
-                                Swal.showLoading();
-
-                            }
-
-                    });
+                </div>
 
 
-                    form.submit();
+                <div class="zb-row">
 
-                }
+                    <div class="zb-label">
+                        Scheduled Date
+                    </div>
 
-            });
+                    <div class="zb-value">
+                        ${scheduleDate}
+                    </div>
 
+                </div>
+
+
+                <div class="zb-row">
+
+                    <div class="zb-label">
+                        Scheduled Time
+                    </div>
+
+                    <div class="zb-value">
+                        ${time}
+                    </div>
+
+                </div>
+
+
+            </div>
+
+
+            ${
+                overdue
+
+                ?
+
+                `
+
+                <div class="zb-warning">
+
+                    <i class="bi bi-exclamation-triangle-fill"></i>
+
+                    <span>
+
+                        This is an overdue prepared dose from a previous scheduled date. Confirm only if this dose should still be administered.
+
+                    </span>
+
+                </div>
+
+                `
+
+                :
+
+                `
+
+                <div class="zb-warning">
+
+                    <i class="bi bi-exclamation-triangle-fill"></i>
+
+                    <span>
+
+                        Confirm only after verifying the correct patient, medication, dosage and scheduled dose.
+
+                    </span>
+
+                </div>
+
+                `
+            }
+
+        `,
+
+
+        confirmButtonText:
+            '<i class="bi bi-check2-circle me-1"></i> Confirm & Give',
+
+        cancelButtonText:
+            'Cancel'
+
+    })
+
+
+    .then(
+        function(result)
+        {
+
+            if (
+                result.isConfirmed
+            )
+            {
+
+                Swal.fire({
+
+                    width:
+                        380,
+
+                    title:
+                        'Recording Administration',
+
+                    text:
+                        'Please wait...',
+
+                    allowOutsideClick:
+                        false,
+
+                    allowEscapeKey:
+                        false,
+
+                    didOpen:
+                        function()
+                        {
+
+                            Swal.showLoading();
+
+                        }
+
+                });
+
+
+                form.submit();
+
+            }
 
         }
     );
 
-});
+}
 
 
 /* =========================================================
-   SUCCESS MESSAGE
+   SCHEDULE BUTTON
 ========================================================= */
 
-<?php
+document
+.querySelectorAll(
+    '.giveDoseBtn'
+)
+.forEach(
+    function(button)
+    {
 
-if (
-    isset($_GET['success']) &&
-    $_GET['success'] == '1'
-):
+        button.addEventListener(
+            'click',
+            function()
+            {
 
-?>
+                confirmMedicationAdministration(
+
+                    this.closest(
+                        '.giveDoseForm'
+                    ),
+
+                    true
+
+                );
+
+            }
+        );
+
+    }
+);
+
+
+/* =========================================================
+   LEGACY BUTTON
+========================================================= */
+
+document
+.querySelectorAll(
+    '.giveLegacyBtn'
+)
+.forEach(
+    function(button)
+    {
+
+        button.addEventListener(
+            'click',
+            function()
+            {
+
+                confirmMedicationAdministration(
+
+                    this.closest(
+                        '.giveLegacyForm'
+                    ),
+
+                    false
+
+                );
+
+            }
+        );
+
+    }
+);
+
+
+/* =========================================================
+   SUCCESS
+========================================================= */
+
+<?php if (
+    ($_GET['success'] ?? '')
+    ===
+    '1'
+): ?>
+
 
 Swal.fire({
+
+    width:
+        420,
 
     icon:
         'success',
 
     title:
-        'Medication Given Successfully',
+        'Medication Administered',
 
     text:
-        'The medication administration has been recorded.',
-
-    confirmButtonText:
-        'OK',
+        'The dose administration has been recorded successfully.',
 
     confirmButtonColor:
-        '#16a34a',
+        '#16803d',
 
-    timer:
-        2500,
-
-    timerProgressBar:
-        true
+    confirmButtonText:
+        'Done'
 
 });
 
@@ -1869,34 +5026,39 @@ Swal.fire({
 
 
 /* =========================================================
-   ALREADY GIVEN
+   ERROR
 ========================================================= */
 
-<?php
+<?php if (
+    ($_GET['error'] ?? '')
+    ===
+    'give_failed'
+): ?>
 
-if (
-    isset($_GET['error']) &&
-    $_GET['error'] == 'already_given'
-):
-
-?>
 
 Swal.fire({
 
+    width:
+        470,
+
     icon:
-        'info',
+        'error',
 
     title:
-        'Already Given',
+        'Unable to Administer Medication',
 
     text:
-        'This medication has already been recorded as given.',
-
-    confirmButtonText:
-        'OK',
+        <?= json_encode(
+            $_GET['message']
+            ??
+            'Unable to record medication administration.'
+        ) ?>,
 
     confirmButtonColor:
-        '#2563eb'
+        '#dc2626',
+
+    confirmButtonText:
+        'Close'
 
 });
 
@@ -1904,18 +5066,12 @@ Swal.fire({
 <?php endif; ?>
 
 
-/* =========================================================
-   INVALID
-========================================================= */
+<?php if (
+    ($_GET['error'] ?? '')
+    ===
+    'invalid'
+): ?>
 
-<?php
-
-if (
-    isset($_GET['error']) &&
-    $_GET['error'] == 'invalid'
-):
-
-?>
 
 Swal.fire({
 
@@ -1926,76 +5082,7 @@ Swal.fire({
         'Invalid Medication',
 
     text:
-        'The medication order could not be processed.',
-
-    confirmButtonText:
-        'OK'
-
-});
-
-
-<?php endif; ?>
-
-
-/* =========================================================
-   NOT FOUND
-========================================================= */
-
-<?php
-
-if (
-    isset($_GET['error']) &&
-    $_GET['error'] == 'not_found'
-):
-
-?>
-
-Swal.fire({
-
-    icon:
-        'error',
-
-    title:
-        'Medication Order Not Found',
-
-    text:
-        'The selected medication order does not exist.',
-
-    confirmButtonText:
-        'OK'
-
-});
-
-
-<?php endif; ?>
-
-
-/* =========================================================
-   DATABASE ERROR
-========================================================= */
-
-<?php
-
-if (
-    isset($_GET['error']) &&
-    $_GET['error'] == 'database'
-):
-
-?>
-
-Swal.fire({
-
-    icon:
-        'error',
-
-    title:
-        'Unable to Record Medication',
-
-    text:
-        'A database error occurred. Please try again.',
-
-    confirmButtonText:
-        'OK',
+        'The selected medication dose is invalid.',
 
     confirmButtonColor:
         '#dc2626'
@@ -2004,6 +5091,7 @@ Swal.fire({
 
 
 <?php endif; ?>
+
 
 </script>
 
