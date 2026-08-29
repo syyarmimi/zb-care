@@ -652,6 +652,31 @@ Medication Delivery
 
 
 <!-- =====================================================
+     BILLING & PAYMENTS
+===================================================== -->
+
+<li class="mb-1">
+
+<a
+    href="admin_billing.php"
+    class="
+        nav-link
+        <?= ($current == 'admin_billing.php')
+            ? 'active'
+            : '' ?>
+    "
+>
+
+<i class="bi bi-receipt"></i>
+
+Billing & Payments
+
+</a>
+
+</li>
+
+
+<!-- =====================================================
      LOGOUT
 ===================================================== -->
 

@@ -1798,8 +1798,6 @@ Patient Name Z-A
 </div>
 
 
-<?php if ($role === 'admin'): ?>
-
 <div class="date-filter-box">
 
 <div class="date-filter-header">
@@ -1891,8 +1889,6 @@ Showing records for
 
 </div>
 
-<?php endif; ?>
-
 </div>
 
 
@@ -1909,7 +1905,7 @@ Patient Records
 </h5>
 
 <div class="table-card-subtitle">
-Admin can review the complete patient journey from consultation to discharge.
+Review the complete patient journey from consultation to discharge.
 </div>
 
 </div>

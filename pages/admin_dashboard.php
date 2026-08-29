@@ -155,6 +155,66 @@ $pendingAppointments = getCount($conn, "
 ");
 
 
+
+/* =========================================================
+   BILLING & PAYMENT SUMMARY
+========================================================= */
+
+$totalBills = getCount($conn, "
+
+    SELECT COUNT(*)
+
+    FROM SYARMIMI.BILL
+
+");
+
+
+$paidBills = getCount($conn, "
+
+    SELECT COUNT(*)
+
+    FROM SYARMIMI.BILL
+
+    WHERE UPPER(TRIM(STATUS)) = 'PAID'
+
+");
+
+
+$unpaidBills = getCount($conn, "
+
+    SELECT COUNT(*)
+
+    FROM SYARMIMI.BILL
+
+    WHERE UPPER(TRIM(STATUS)) = 'UNPAID'
+
+");
+
+
+$totalRevenue = (float)$conn->query("
+
+    SELECT NVL(SUM(AMOUNT), 0)
+
+    FROM SYARMIMI.PAYMENT
+
+    WHERE UPPER(TRIM(PAYMENT_STATUS)) = 'PAID'
+
+")->fetchColumn();
+
+
+$todayRevenue = (float)$conn->query("
+
+    SELECT NVL(SUM(AMOUNT), 0)
+
+    FROM SYARMIMI.PAYMENT
+
+    WHERE UPPER(TRIM(PAYMENT_STATUS)) = 'PAID'
+
+    AND TRUNC(PAYMENT_DATE) = TRUNC(SYSDATE)
+
+")->fetchColumn();
+
+
 /* =========================================================
    DOCTOR AVAILABILITY TODAY
 ========================================================= */
@@ -1395,7 +1455,7 @@ body {
 
     grid-template-columns:
         repeat(
-            6,
+            7,
             minmax(0,1fr)
         );
 
@@ -2961,6 +3021,255 @@ Doctor Availability
 
 
 <!-- =========================================================
+     BILLING & PAYMENT OVERVIEW
+========================================================= -->
+
+<section class="main-grid">
+
+
+<div class="panel">
+
+
+<div class="panel-header">
+
+
+<div class="panel-title-wrap">
+
+<div class="panel-icon">
+    <i class="bi bi-receipt"></i>
+</div>
+
+<div>
+
+<h2 class="panel-title">
+    Billing & Payment Overview
+</h2>
+
+<div class="panel-subtitle">
+    Current billing and payment status
+</div>
+
+</div>
+
+</div>
+
+
+<a
+    href="admin_billing.php"
+    class="panel-link"
+>
+View Billing
+</a>
+
+
+</div>
+
+
+<div class="today-grid">
+
+
+<div class="today-card">
+
+<div class="today-card-top">
+
+<div class="today-icon">
+    <i class="bi bi-receipt-cutoff"></i>
+</div>
+
+<div>
+
+<div class="today-label">
+    Total Bills
+</div>
+
+<div class="today-number">
+    <?= $totalBills ?>
+</div>
+
+</div>
+
+</div>
+
+<div class="today-note">
+    All generated patient bills
+</div>
+
+</div>
+
+
+<div class="today-card">
+
+<div class="today-card-top">
+
+<div class="today-icon">
+    <i class="bi bi-check-circle"></i>
+</div>
+
+<div>
+
+<div class="today-label">
+    Paid Bills
+</div>
+
+<div class="today-number text-green">
+    <?= $paidBills ?>
+</div>
+
+</div>
+
+</div>
+
+<div class="today-note">
+    Successfully completed payments
+</div>
+
+</div>
+
+
+<div class="today-card">
+
+<div class="today-card-top">
+
+<div class="today-icon">
+    <i class="bi bi-clock-history"></i>
+</div>
+
+<div>
+
+<div class="today-label">
+    Unpaid Bills
+</div>
+
+<div class="today-number text-orange">
+    <?= $unpaidBills ?>
+</div>
+
+</div>
+
+</div>
+
+<div class="today-note">
+    Outstanding patient bills
+</div>
+
+</div>
+
+
+</div>
+
+
+</div>
+
+
+<div class="panel">
+
+
+<div class="panel-header">
+
+
+<div class="panel-title-wrap">
+
+<div class="panel-icon">
+    <i class="bi bi-cash-stack"></i>
+</div>
+
+<div>
+
+<h2 class="panel-title">
+    Payment Revenue
+</h2>
+
+<div class="panel-subtitle">
+    Revenue from successful patient payments
+</div>
+
+</div>
+
+</div>
+
+
+<a
+    href="admin_billing.php?status=PAID"
+    class="panel-link"
+>
+Payment History
+</a>
+
+
+</div>
+
+
+<div class="today-grid" style="grid-template-columns:1fr 1fr;">
+
+
+<div class="today-card">
+
+<div class="today-card-top">
+
+<div class="today-icon">
+    <i class="bi bi-wallet2"></i>
+</div>
+
+<div>
+
+<div class="today-label">
+    Total Revenue
+</div>
+
+<div class="today-number text-purple">
+    RM <?= number_format($totalRevenue, 2) ?>
+</div>
+
+</div>
+
+</div>
+
+<div class="today-note">
+    Revenue from all paid transactions
+</div>
+
+</div>
+
+
+<div class="today-card">
+
+<div class="today-card-top">
+
+<div class="today-icon">
+    <i class="bi bi-calendar-check"></i>
+</div>
+
+<div>
+
+<div class="today-label">
+    Today's Revenue
+</div>
+
+<div class="today-number text-green">
+    RM <?= number_format($todayRevenue, 2) ?>
+</div>
+
+</div>
+
+</div>
+
+<div class="today-note">
+    Payments received today
+</div>
+
+</div>
+
+
+</div>
+
+
+</div>
+
+
+</section>
+
+
+<!-- =========================================================
      QUICK ACTION
 ========================================================= -->
 
@@ -3061,6 +3370,26 @@ Doctor Availability
 <strong>Medication</strong>
 
 <span>Medication orders</span>
+
+</div>
+
+</a>
+
+
+<a
+    href="../pages/admin_billing.php"
+    class="quick-action"
+>
+
+<div class="quick-icon">
+    <i class="bi bi-receipt"></i>
+</div>
+
+<div class="quick-text">
+
+<strong>Billing & Payments</strong>
+
+<span><?= $unpaidBills ?> unpaid bill<?= $unpaidBills == 1 ? '' : 's' ?></span>
 
 </div>
 

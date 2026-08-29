@@ -1927,7 +1927,6 @@ catch (Exception $e) {
 
 $myAdmissions = [];
 
-
 try {
 
     $admissionStmt =
@@ -1936,72 +1935,82 @@ try {
             SELECT
 
                 A.ADMISSION_ID,
-
                 A.PATIENT_ID,
-
                 A.BED_ID,
 
                 TO_CHAR(
                     A.ADMISSION_DATE,
                     'DD-MON-RR'
-                )
-                AS ADMISSION_DATE_DISPLAY,
+                ) AS ADMISSION_DATE_DISPLAY,
 
                 TO_CHAR(
                     A.EXPECTED_DISCHARGE_DATE,
                     'DD-MON-RR'
-                )
-                AS EXPECTED_DATE_DISPLAY,
+                ) AS EXPECTED_DATE_DISPLAY,
 
-                P.NAME
-                AS PATIENT_NAME,
+                TO_CHAR(
+                    A.EXPECTED_DISCHARGE_DATE,
+                    'YYYY-MM-DD'
+                ) AS EXPECTED_DATE_VALUE,
 
+                CASE
+                    WHEN A.EXPECTED_DISCHARGE_DATE IS NOT NULL
+                    THEN GREATEST(
+                        1,
+                        TRUNC(A.EXPECTED_DISCHARGE_DATE)
+                        - TRUNC(A.ADMISSION_DATE)
+                        + 1
+                    )
+                    ELSE GREATEST(
+                        1,
+                        TRUNC(SYSDATE)
+                        - TRUNC(A.ADMISSION_DATE)
+                        + 1
+                    )
+                END AS STAY_DAYS,
+
+                CASE
+                    WHEN A.EXPECTED_DISCHARGE_DATE IS NULL
+                    THEN 'CURRENT'
+                    ELSE 'PLANNED'
+                END AS STAY_TYPE,
+
+                CASE
+                    WHEN A.EXPECTED_DISCHARGE_DATE IS NOT NULL
+                    AND TRUNC(SYSDATE) < TRUNC(A.EXPECTED_DISCHARGE_DATE)
+                    THEN 1
+                    ELSE 0
+                END AS IS_EARLY_DISCHARGE,
+
+                P.NAME AS PATIENT_NAME,
                 B.BED_NUMBER,
-
                 W.WARD_NAME
 
-            FROM
-                SYARMIMI.ADMISSION A
+            FROM SYARMIMI.ADMISSION A
 
-            JOIN
-                SYARMIMI.PATIENT P
+            JOIN SYARMIMI.PATIENT P
+                ON A.PATIENT_ID = P.PATIENT_ID
 
-                ON
-                A.PATIENT_ID =
-                P.PATIENT_ID
+            JOIN SYARMIMI.BED B
+                ON A.BED_ID = B.BED_ID
 
-            JOIN
-                SYARMIMI.BED B
-
-                ON
-                A.BED_ID =
-                B.BED_ID
-
-            JOIN
-                SYARMIMI.WARD W
-
-                ON
-                B.WARD_ID =
-                W.WARD_ID
+            JOIN SYARMIMI.WARD W
+                ON B.WARD_ID = W.WARD_ID
 
             WHERE
                 A.ACCOUNT_ID = ?
 
             AND
-                A.DISCHARGE_DATE
-                IS NULL
+                A.DISCHARGE_DATE IS NULL
 
             ORDER BY
-                A.ADMISSION_DATE
-                DESC
+                A.ADMISSION_DATE DESC
 
         ");
-
 
     $admissionStmt->execute([
         $doctor_id
     ]);
-
 
     $myAdmissions =
         $admissionStmt->fetchAll(
@@ -2012,6 +2021,12 @@ try {
 catch (Exception $e) {
 
     $myAdmissions = [];
+
+    if ($errorMessage === '') {
+        $errorMessage =
+            "Unable to load current admitted patients: "
+            . $e->getMessage();
+    }
 }
 
 
@@ -4649,6 +4664,86 @@ textarea.form-control{
 }
 
 
+
+/* =========================================================
+   ADMITTED PATIENT ACTIONS
+========================================================= */
+
+.admission-action-group{
+    display:flex;
+    align-items:center;
+    gap:6px;
+    flex-wrap:wrap;
+}
+
+.admission-action-btn{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    gap:5px;
+    padding:7px 10px;
+    border-radius:8px;
+    font-size:11px;
+    font-weight:650;
+    text-decoration:none;
+    white-space:nowrap;
+    transition:.2s ease;
+}
+
+.btn-review-patient{
+    color:#047857;
+    background:#ecfdf5;
+    border:1px solid #a7f3d0;
+}
+
+.btn-review-patient:hover{
+    color:#065f46;
+    background:#d1fae5;
+}
+
+.btn-manage-stay{
+    color:#2563eb;
+    background:#eff6ff;
+    border:1px solid #bfdbfe;
+}
+
+.btn-manage-stay:hover{
+    color:#1d4ed8;
+    background:#dbeafe;
+}
+
+.btn-discharge-patient{
+    color:#dc2626;
+    background:#fef2f2;
+    border:1px solid #fecaca;
+}
+
+.btn-discharge-patient:hover{
+    color:#b91c1c;
+    background:#fee2e2;
+}
+
+.no-date{
+    display:inline-flex;
+    align-items:center;
+    gap:5px;
+    color:#d97706;
+    font-size:11px;
+    font-weight:650;
+}
+
+.stay-badge{
+    display:inline-flex;
+    align-items:center;
+    padding:5px 8px;
+    border-radius:999px;
+    background:#ecfdf5;
+    color:#047857;
+    font-size:10px;
+    font-weight:700;
+}
+
+
 /* =========================================================
    RESPONSIVE
 ========================================================= */
@@ -5076,8 +5171,9 @@ No patients in today's queue.
 
 <div class="card-box">
 
+<div class="d-flex justify-content-between align-items-center mb-3">
 
-<div class="section-title">
+<div class="section-title mb-0">
 
 <i class="bi bi-hospital"></i>
 
@@ -5085,162 +5181,160 @@ My Current Admitted Patients
 
 </div>
 
+<span class="badge bg-success rounded-pill px-3 py-2">
+<?= count($myAdmissions) ?> Active
+</span>
+
+</div>
+
 
 <div class="table-responsive">
 
-
 <table class="table">
-
 
 <thead>
 
 <tr>
-
-<th>
-Patient
-</th>
-
-<th>
-Ward
-</th>
-
-<th>
-Bed
-</th>
-
-<th>
-Admission Date
-</th>
-
-<th>
-Expected Discharge
-</th>
-
+<th>Patient</th>
+<th>Ward</th>
+<th>Bed</th>
+<th>Admission Date</th>
+<th>Expected Discharge</th>
+<th>Stay</th>
+<th>Action</th>
 </tr>
 
 </thead>
 
-
 <tbody>
 
+<?php if (!empty($myAdmissions)): ?>
 
-<?php if (
-    !empty(
-        $myAdmissions
-    )
-): ?>
-
-
-<?php foreach (
-    $myAdmissions
-    as
-    $admission
-): ?>
-
+<?php foreach ($myAdmissions as $admission): ?>
 
 <tr>
 
+<td>
+<strong>
+<?= h($admission['PATIENT_NAME']) ?>
+</strong>
+</td>
 
 <td>
+<?= h($admission['WARD_NAME']) ?>
+</td>
+
+<td>
+<span class="badge bg-secondary">
+Bed <?= h($admission['BED_NUMBER']) ?>
+</span>
+</td>
+
+<td>
+<?= h($admission['ADMISSION_DATE_DISPLAY']) ?>
+</td>
+
+<td>
+
+<?php if (!empty($admission['EXPECTED_DATE_VALUE'])): ?>
 
 <strong>
-
-<?= h(
-    $admission[
-        'PATIENT_NAME'
-    ]
-) ?>
-
+<?= h($admission['EXPECTED_DATE_DISPLAY']) ?>
 </strong>
-
-</td>
-
-
-<td>
-
-<?= h(
-    $admission[
-        'WARD_NAME'
-    ]
-) ?>
-
-</td>
-
-
-<td>
-
-<?= h(
-    $admission[
-        'BED_NUMBER'
-    ]
-) ?>
-
-</td>
-
-
-<td>
-
-<?= h(
-    $admission[
-        'ADMISSION_DATE_DISPLAY'
-    ]
-) ?>
-
-</td>
-
-
-<td>
-
-<?= h(
-    $admission[
-        'EXPECTED_DATE_DISPLAY'
-    ]
-    ?: '-'
-) ?>
-
-</td>
-
-
-</tr>
-
-
-<?php endforeach; ?>
-
 
 <?php else: ?>
 
+<span class="no-date">
+<i class="bi bi-exclamation-circle"></i>
+Not Set
+</span>
 
-<tr>
+<?php endif; ?>
 
-<td
-    colspan="5"
-    class="text-center text-muted py-4"
+</td>
+
+<td>
+
+<span class="stay-badge">
+<?= max(1, (int)($admission['STAY_DAYS'] ?? 1)) ?> day(s)
+</span>
+
+<div class="text-muted mt-1" style="font-size:10px;">
+<?= (($admission['STAY_TYPE'] ?? '') === 'PLANNED')
+    ? 'Planned stay'
+    : 'Current stay'
+?>
+</div>
+
+</td>
+
+<td>
+
+<div class="admission-action-group">
+
+<a
+    href="patient_review.php?admission_id=<?= (int)$admission['ADMISSION_ID'] ?>"
+    class="admission-action-btn btn-review-patient"
 >
+<i class="bi bi-clipboard2-pulse"></i>
+Review
+</a>
 
-No current admitted patients.
+<a
+    href="extend_admission.php?admission_id=<?= (int)$admission['ADMISSION_ID'] ?>"
+    class="admission-action-btn btn-manage-stay"
+>
+<i class="bi <?= !empty($admission['EXPECTED_DATE_VALUE'])
+    ? 'bi-calendar-plus'
+    : 'bi-calendar-check'
+?>"></i>
+
+<?= !empty($admission['EXPECTED_DATE_VALUE'])
+    ? 'Extend Stay'
+    : 'Set Expected Date'
+?>
+</a>
+
+<a
+    href="discharge_patient.php?admission_id=<?= (int)$admission['ADMISSION_ID'] ?>"
+    class="admission-action-btn btn-discharge-patient"
+>
+<i class="bi bi-box-arrow-right"></i>
+
+<?= ((int)($admission['IS_EARLY_DISCHARGE'] ?? 0) === 1)
+    ? 'Discharge Early'
+    : 'Discharge'
+?>
+</a>
+
+</div>
 
 </td>
 
 </tr>
 
+<?php endforeach; ?>
+
+<?php else: ?>
+
+<tr>
+<td colspan="7" class="text-center text-muted py-4">
+No current admitted patients.
+</td>
+</tr>
 
 <?php endif; ?>
-
 
 </tbody>
 
-
 </table>
 
-
 </div>
-
 
 </div>
 
 
 <?php endif; ?>
-
 
 
 <!-- =====================================================

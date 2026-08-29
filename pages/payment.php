@@ -1562,7 +1562,232 @@ body{
     }
 }
 
+
+/* =========================================================
+   PREMIUM RECEIPT STYLE
+========================================================= */
+
+.receipt-card{
+    width:min(820px,100%);
+    margin:0 auto;
+    padding:0;
+    overflow:hidden;
+    border:1px solid #dfe7ef;
+    border-radius:20px;
+    background:#fff;
+    box-shadow:0 18px 50px rgba(15,23,42,.08);
+}
+
+.receipt-topband{
+    height:8px;
+    background:linear-gradient(90deg,#2563eb,#0ea5e9);
+}
+
+.receipt-body{
+    padding:34px 36px 32px;
+}
+
+.receipt-brand{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:16px;
+    margin-bottom:28px;
+}
+
+.receipt-brand-left{
+    display:flex;
+    align-items:center;
+    gap:12px;
+}
+
+.receipt-brand-logo{
+    width:46px;
+    height:46px;
+    display:grid;
+    place-items:center;
+    border-radius:13px;
+    background:#eff6ff;
+    color:#2563eb;
+    font-size:22px;
+}
+
+.receipt-brand-name{
+    color:#0f172a;
+    font-size:18px;
+    font-weight:850;
+    letter-spacing:-.3px;
+}
+
+.receipt-brand-sub{
+    margin-top:2px;
+    color:#94a3b8;
+    font-size:10px;
+    text-transform:uppercase;
+    letter-spacing:.12em;
+}
+
+.receipt-badge-paid{
+    display:inline-flex;
+    align-items:center;
+    gap:7px;
+    padding:8px 11px;
+    border-radius:999px;
+    background:#ecfdf5;
+    color:#15803d;
+    font-size:10px;
+    font-weight:800;
+    text-transform:uppercase;
+    letter-spacing:.06em;
+}
+
+.receipt-success{
+    margin-bottom:26px;
+    padding:24px 20px;
+    border:1px solid #dcfce7;
+    border-radius:16px;
+    background:linear-gradient(180deg,#f0fdf4,#ffffff);
+    text-align:center;
+}
+
+.receipt-icon{
+    width:62px;
+    height:62px;
+    display:grid;
+    place-items:center;
+    margin:0 auto 12px;
+    border-radius:50%;
+    background:#16a34a;
+    color:#fff;
+    font-size:29px;
+    box-shadow:0 10px 24px rgba(22,163,74,.18);
+}
+
+.receipt-success .detail-title{
+    font-size:24px;
+}
+
+.receipt-reference{
+    margin-top:7px;
+    color:#64748b;
+    font-size:11px;
+}
+
+.receipt-reference strong{
+    color:#0f172a;
+    letter-spacing:.04em;
+}
+
+.receipt-info{
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:12px;
+    margin:0 0 24px;
+}
+
+.receipt-info-box{
+    padding:14px 15px;
+    border:1px solid #e8edf3;
+    border-radius:12px;
+    background:#fbfcfe;
+}
+
+.receipt-info-label{
+    color:#94a3b8;
+    font-size:9px;
+    font-weight:800;
+    text-transform:uppercase;
+    letter-spacing:.08em;
+}
+
+.receipt-info-value{
+    margin-top:5px;
+    color:#1e293b;
+    font-size:12px;
+    font-weight:750;
+}
+
+.receipt-items-title{
+    margin:0 0 10px;
+    color:#0f172a;
+    font-size:13px;
+    font-weight:800;
+}
+
+.receipt-card .items{
+    border:1px solid #e7edf3;
+    border-radius:14px;
+    background:#fff;
+}
+
+.receipt-card .item-row{
+    grid-template-columns:minmax(0,1fr) 70px 105px 110px;
+    padding:14px 16px;
+}
+
+.receipt-card .item-head{
+    background:#f8fafc;
+}
+
+.receipt-card .total-row{
+    margin-top:16px;
+    padding:17px 18px;
+    border:1px solid #dbeafe;
+    border-radius:13px;
+    background:#eff6ff;
+}
+
+.receipt-card .total-row span{
+    color:#475569;
+    font-size:12px;
+    font-weight:700;
+}
+
+.receipt-card .total-row strong{
+    color:#1d4ed8;
+    font-size:23px;
+    font-weight:900;
+}
+
+.receipt-footer-note{
+    display:flex;
+    align-items:flex-start;
+    gap:8px;
+    margin-top:18px;
+    padding-top:16px;
+    border-top:1px dashed #cbd5e1;
+    color:#94a3b8;
+    font-size:10px;
+    line-height:1.55;
+}
+
+.receipt-actions{
+    display:flex;
+    justify-content:center;
+    gap:9px;
+    margin-top:22px;
+}
+
+.receipt-actions .btn{
+    min-width:140px;
+    min-height:42px;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+}
+
+.receipt-stamp{
+    margin-top:4px;
+    color:#64748b;
+    font-size:10px;
+}
+
 @media print{
+
+    @page{
+        size:A4;
+        margin:14mm;
+    }
 
     .topbar,
     .hero,
@@ -1572,8 +1797,11 @@ body{
         display:none !important;
     }
 
+    html,
     body{
-        background:#fff;
+        background:#fff !important;
+        -webkit-print-color-adjust:exact;
+        print-color-adjust:exact;
     }
 
     .page-shell{
@@ -1581,9 +1809,37 @@ body{
         margin:0;
     }
 
-    .card-box{
-        border:0;
+    .receipt-card{
+        width:100%;
+        max-width:none;
+        margin:0;
+        border:1px solid #dbe3ec;
+        border-radius:16px;
         box-shadow:none;
+        page-break-inside:avoid;
+    }
+
+    .receipt-body{
+        padding:24px 26px 22px;
+    }
+
+    .receipt-actions{
+        display:none !important;
+    }
+
+    .receipt-success{
+        background:#f8fffb !important;
+    }
+
+    .receipt-card .total-row{
+        background:#eff6ff !important;
+    }
+
+    .item-row,
+    .receipt-info-box,
+    .receipt-success,
+    .total-row{
+        break-inside:avoid;
     }
 }
 
@@ -1793,7 +2049,34 @@ Search Another Patient
      RECEIPT
 ===================================================== -->
 
-<div class="card-box receipt-card">
+<div class="receipt-card">
+
+<div class="receipt-topband"></div>
+
+<div class="receipt-body">
+
+<div class="receipt-brand">
+
+<div class="receipt-brand-left">
+
+<div class="receipt-brand-logo">
+<i class="bi bi-heart-pulse-fill"></i>
+</div>
+
+<div>
+<div class="receipt-brand-name">ZB-CARE Specialist Hospital</div>
+<div class="receipt-brand-sub">Official Payment Receipt</div>
+</div>
+
+</div>
+
+<div class="receipt-badge-paid">
+<i class="bi bi-shield-check"></i>
+Paid
+</div>
+
+</div>
+
 
 <div class="receipt-success">
 
@@ -1806,10 +2089,14 @@ Payment Successful
 </div>
 
 <div class="receipt-reference">
-Reference:
+Payment Reference:
 <strong>
 <?= h($selectedPayment['REFERENCE_NO']) ?>
 </strong>
+</div>
+
+<div class="receipt-stamp">
+Thank you. Your payment has been recorded successfully.
 </div>
 
 </div>
@@ -1833,6 +2120,19 @@ Patient
 <div class="receipt-info-box">
 
 <div class="receipt-info-label">
+IC Number
+</div>
+
+<div class="receipt-info-value">
+<?= h($selectedPayment['IC_NUMBER']) ?>
+</div>
+
+</div>
+
+
+<div class="receipt-info-box">
+
+<div class="receipt-info-label">
 Bill
 </div>
 
@@ -1848,7 +2148,7 @@ Bill
 <div class="receipt-info-box">
 
 <div class="receipt-info-label">
-Payment Date
+Payment Date & Time
 </div>
 
 <div class="receipt-info-value">
@@ -1870,6 +2170,24 @@ Payment Method
 
 </div>
 
+
+<div class="receipt-info-box">
+
+<div class="receipt-info-label">
+Payment Status
+</div>
+
+<div class="receipt-info-value">
+<?= h($selectedPayment['PAYMENT_STATUS']) ?>
+</div>
+
+</div>
+
+</div>
+
+
+<div class="receipt-items-title">
+Payment Breakdown
 </div>
 
 
@@ -1922,12 +2240,24 @@ RM <?= formatMoney($item['SUBTOTAL']) ?>
 <div class="total-row">
 
 <span>
-Amount Paid
+Total Amount Paid
 </span>
 
 <strong>
 RM <?= formatMoney($selectedPayment['AMOUNT']) ?>
 </strong>
+
+</div>
+
+
+<div class="receipt-footer-note">
+
+<i class="bi bi-info-circle"></i>
+
+<div>
+This receipt was generated electronically by ZB-CARE Specialist Hospital System.
+Please keep the payment reference for future reference.
+</div>
 
 </div>
 
@@ -1950,6 +2280,8 @@ Back to Bills
 <i class="bi bi-printer me-1"></i>
 Print Receipt
 </button>
+
+</div>
 
 </div>
 
