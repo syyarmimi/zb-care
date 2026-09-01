@@ -57,7 +57,7 @@ $currentSearch =
 
 $currentSort =
     $_GET['sort']
-    ?? 'asc';
+    ?? 'desc';
 
 $currentRecordDate =
     trim(
@@ -103,7 +103,7 @@ if (
     &&
     $currentSort !== 'desc'
 ) {
-    $currentSort = 'asc';
+    $currentSort = 'desc';
 }
 
 
@@ -168,22 +168,6 @@ function redirectWithFilters(
 
 /* =========================================================
    PREPARE ADMISSION SCHEDULED DOSE
-
-   INPATIENT FLOW:
-
-   Pending Preparation
-        ↓
-   Pharmacist Prepare
-        ↓
-   Ready For Nurse Pickup
-        ↓
-   Nurse collection
-        ↓
-   Collected / Collected By Nurse
-        ↓
-   Nurse administration
-        ↓
-   Administered
 ========================================================= */
 
 if (
@@ -279,10 +263,6 @@ if (
         }
 
 
-        /* =================================================
-           MUST BE INPATIENT / ADMISSION
-        ================================================= */
-
         if (
             empty(
                 $schedule[
@@ -310,12 +290,6 @@ if (
             );
 
 
-        /*
-           Historical admission data may have NULL ORDER_TYPE.
-
-           ADMISSION_ID remains the authoritative fallback.
-        */
-
         if (
             $orderType !== ''
             &&
@@ -327,10 +301,6 @@ if (
             );
         }
 
-
-        /* =================================================
-           DISCHARGED PATIENT = HISTORY ONLY
-        ================================================= */
 
         if (
             !empty(
@@ -345,10 +315,6 @@ if (
             );
         }
 
-
-        /* =================================================
-           CANCELLED DOSE CANNOT BE PREPARED
-        ================================================= */
 
         $scheduleStatus =
             strtoupper(
@@ -635,10 +601,6 @@ if (
         ]);
 
 
-        /* =================================================
-           UPDATE SCHEDULE STATUS
-        ================================================= */
-
         $updateSchedule =
             $conn->prepare("
 
@@ -693,26 +655,6 @@ if (
 
 /* =========================================================
    PREPARE PATIENT-PICKUP MEDICATION
-
-   SUPPORTED:
-
-   APPOINTMENT
-   WALKIN
-   DISCHARGE
-
-   All use:
-
-   Ready For Pickup
-        ↓
-   Patient Collect
-        ↓
-   Collected
-
-   DISCHARGE medication does NOT have:
-   - ADMISSION_ID
-   - APPOINTMENT_ID
-   - CONSULTATION_ID
-   - MEDICATION_SCHEDULE
 ========================================================= */
 
 if (
@@ -783,10 +725,6 @@ if (
         }
 
 
-        /* =================================================
-           ADMISSION MUST USE SCHEDULE
-        ================================================= */
-
         if (
             !empty(
                 $order[
@@ -801,10 +739,6 @@ if (
         }
 
 
-        /* =================================================
-           DETERMINE TYPE
-        ================================================= */
-
         $orderType =
             strtoupper(
                 trim(
@@ -817,11 +751,6 @@ if (
                 )
             );
 
-
-        /*
-           Legacy fallback:
-           old rows may have ORDER_TYPE NULL.
-        */
 
         if ($orderType === '') {
 
@@ -869,10 +798,6 @@ if (
         }
 
 
-        /* =================================================
-           DISCHARGE ORDER MUST HAVE PATIENT
-        ================================================= */
-
         if (
             $orderType === 'DISCHARGE'
             &&
@@ -888,10 +813,6 @@ if (
             );
         }
 
-
-        /* =================================================
-           CHECK ALREADY PREPARED
-        ================================================= */
 
         $checkPrep =
             $conn->prepare("
@@ -932,10 +853,6 @@ if (
             ]);
         }
 
-
-        /* =================================================
-           INSERT PREPARATION
-        ================================================= */
 
         $insertPrep =
             $conn->prepare("
@@ -1011,10 +928,6 @@ if (
 
 /* =========================================================
    COLLECT PATIENT-PICKUP MEDICATION
-
-   Appointment
-   Walk-In
-   Discharge
 ========================================================= */
 
 if (
@@ -1042,10 +955,6 @@ if (
 
         $conn->beginTransaction();
 
-
-        /* =================================================
-           VERIFY ORDER IS PATIENT PICKUP
-        ================================================= */
 
         $orderStmt =
             $conn->prepare("
@@ -1160,10 +1069,6 @@ if (
             );
         }
 
-
-        /* =================================================
-           UPDATE LATEST PREPARATION
-        ================================================= */
 
         $prepStmt =
             $conn->prepare("
@@ -1308,10 +1213,6 @@ if (
 
 /* =========================================================
    PENDING ADMISSION TODAY
-
-   Only active INPATIENT scheduled doses.
-
-   Cancelled/discharged schedules excluded.
 ========================================================= */
 
 $pendingAdmissionStmt =
@@ -1589,14 +1490,6 @@ $pendingCount =
 
 /* =========================================================
    ADMISSION MEDICATION RECORDS
-
-   Keep historical active/discharged admission records.
-
-   ORDER_TYPE DB:
-   INPATIENT
-
-   DISPLAY:
-   Admission
 ========================================================= */
 
 $admissionSql = "
@@ -1709,47 +1602,47 @@ $admissionSql = "
         END
         AS HAS_SCHEDULE,
 
-        CASE
 
-            WHEN
-                MS.SCHEDULE_DATE
-                IS NOT NULL
+        /* =================================================
+           FIXED SORT KEY
 
-            THEN
-                TO_CHAR(
-                    MS.SCHEDULE_DATE,
-                    'YYYYMMDD'
-                )
-                ||
-                REPLACE(
-                    NVL(
-                        MS.SCHEDULE_TIME,
-                        '00:00'
-                    ),
-                    ':',
-                    ''
-                )
+           MEDORDER_ID controls newest / oldest medication
+           order first.
 
-            ELSE
-                TO_CHAR(
-                    NVL(
-                        MO.MED_START_DATE,
-                        A.ADMISSION_DATE
-                    ),
-                    'YYYYMMDD'
-                )
-                ||
-                '9999'
-                ||
-                LPAD(
-                    TO_CHAR(
-                        MO.MEDORDER_ID
-                    ),
-                    10,
-                    '0'
-                )
+           Schedule date/time is used as secondary sorting
+           within the same medication order.
+        ================================================= */
 
-        END
+        LPAD(
+            TO_CHAR(
+                MO.MEDORDER_ID
+            ),
+            12,
+            '0'
+        )
+        ||
+        NVL(
+            TO_CHAR(
+                MS.SCHEDULE_DATE,
+                'YYYYMMDD'
+            ),
+            TO_CHAR(
+                NVL(
+                    MO.MED_START_DATE,
+                    A.ADMISSION_DATE
+                ),
+                'YYYYMMDD'
+            )
+        )
+        ||
+        REPLACE(
+            NVL(
+                MS.SCHEDULE_TIME,
+                '00:00'
+            ),
+            ':',
+            ''
+        )
         AS SORT_KEY
 
     FROM
@@ -1885,10 +1778,6 @@ $admissionOrders =
 
 /* =========================================================
    APPOINTMENT / WALK-IN / DISCHARGE
-
-   Patient-pickup medication.
-
-   No schedule required.
 ========================================================= */
 
 $outpatientSql = "
@@ -1997,10 +1886,19 @@ $outpatientSql = "
         NULL
         AS SCHEDULE_DATE_VALUE,
 
+
+        /* =================================================
+           DATE USED BY DATE FILTER
+
+           IMPORTANT:
+           Do not use SYSDATE for old records when
+           MED_START_DATE is NULL.
+        ================================================= */
+
         TO_CHAR(
             NVL(
                 MO.MED_START_DATE,
-                SYSDATE
+                DATE '1900-01-01'
             ),
             'YYYY-MM-DD'
         )
@@ -2036,23 +1934,33 @@ $outpatientSql = "
         0
         AS HAS_SCHEDULE,
 
-        TO_CHAR(
-            NVL(
-                MO.MED_START_DATE,
-                SYSDATE
-            ),
-            'YYYYMMDD'
-        )
-        ||
-        '5000'
-        ||
+
+        /* =================================================
+           FIXED SORT KEY
+
+           MEDORDER_ID is safest for determining which
+           medication order was created later.
+
+           Missing MED_START_DATE no longer becomes SYSDATE.
+        ================================================= */
+
         LPAD(
             TO_CHAR(
                 MO.MEDORDER_ID
             ),
-            10,
+            12,
             '0'
         )
+        ||
+        TO_CHAR(
+            NVL(
+                MO.MED_START_DATE,
+                DATE '1900-01-01'
+            ),
+            'YYYYMMDD'
+        )
+        ||
+        '0000'
         AS SORT_KEY
 
     FROM
@@ -2176,10 +2084,6 @@ $outpatientOrders =
         );
 
 
-/* =========================================================
-   MERGE ALL RECORDS
-========================================================= */
-
 $orders =
     array_merge(
         $admissionOrders,
@@ -2231,10 +2135,6 @@ Prepare Medication
 
 <style>
 
-/* =========================================================
-   GLOBAL
-========================================================= */
-
 *{
     box-sizing:border-box;
 }
@@ -2255,10 +2155,6 @@ body{
 }
 
 
-/* =========================================================
-   MAIN
-========================================================= */
-
 .main-content{
 
     flex:1;
@@ -2270,10 +2166,6 @@ body{
     padding:30px;
 }
 
-
-/* =========================================================
-   HEADER
-========================================================= */
 
 .page-header{
 
@@ -2335,10 +2227,6 @@ body{
 }
 
 
-/* =========================================================
-   ALERT
-========================================================= */
-
 .workflow-alert{
 
     display:flex;
@@ -2366,10 +2254,6 @@ body{
     font-size:12px;
 }
 
-
-/* =========================================================
-   CARD
-========================================================= */
 
 .preparation-card{
 
@@ -2410,10 +2294,6 @@ body{
     font-size:13px;
 }
 
-
-/* =========================================================
-   DATE FILTER
-========================================================= */
 
 .date-record-box{
 
@@ -2524,10 +2404,6 @@ body{
 }
 
 
-/* =========================================================
-   FILTER
-========================================================= */
-
 .filter-box{
 
     margin-bottom:18px;
@@ -2610,10 +2486,6 @@ body{
 }
 
 
-/* =========================================================
-   TABLE
-========================================================= */
-
 .table-responsive{
 
     overflow-x:auto;
@@ -2695,10 +2567,6 @@ body{
 }
 
 
-/* =========================================================
-   BADGES
-========================================================= */
-
 .status-badge{
 
     display:inline-flex;
@@ -2720,112 +2588,70 @@ body{
 
 
 .badge-admission{
-
     background:#fff1f2;
-
     color:#be123c;
 }
 
-
 .badge-appointment{
-
     background:#eff6ff;
-
     color:#2563eb;
 }
 
-
 .badge-walkin{
-
     background:#fff7ed;
-
     color:#c2410c;
 }
 
-
 .badge-discharge{
-
     background:#f5f3ff;
-
     color:#7c3aed;
 }
 
-
 .badge-nurse{
-
     background:#ecfeff;
-
     color:#0e7490;
 }
 
-
 .badge-patient{
-
     background:#ecfdf5;
-
     color:#15803d;
 }
 
-
 .badge-pending{
-
     background:#fff7ed;
-
     color:#c2410c;
 }
 
-
 .badge-ready{
-
     background:#ecfdf5;
-
     color:#15803d;
 }
 
-
 .badge-collected{
-
     background:#eff6ff;
-
     color:#2563eb;
 }
 
-
 .badge-administered{
-
     background:#f3e8ff;
-
     color:#7e22ce;
 }
 
-
 .badge-discharged{
-
     background:#f1f5f9;
-
     color:#475569;
 }
 
-
 .badge-unscheduled{
-
     background:#fef3c7;
-
     color:#92400e;
 }
 
-
 .badge-cancelled{
-
     background:#f3f4f6;
-
     color:#6b7280;
 }
 
-
-/* =========================================================
-   SCHEDULE
-========================================================= */
 
 .schedule-time{
 
@@ -2855,10 +2681,6 @@ body{
 }
 
 
-/* =========================================================
-   ACTION
-========================================================= */
-
 .action-btn{
 
     min-height:33px;
@@ -2882,92 +2704,55 @@ body{
 
 
 .btn-prepare{
-
     border:0;
-
     background:#16a34a;
-
     color:#fff;
 }
-
 
 .btn-prepare:hover{
-
     background:#15803d;
-
     color:#fff;
 }
-
 
 .btn-collect{
-
     border:0;
-
     background:#2563eb;
-
     color:#fff;
 }
-
 
 .btn-collect:hover{
-
     background:#1d4ed8;
-
     color:#fff;
 }
 
-
 .action-disabled{
-
     background:#f3f4f6;
-
     border:1px solid #e5e7eb;
-
     color:#94a3b8;
 }
 
 
-/* =========================================================
-   TIME
-========================================================= */
-
 .due-now{
-
     color:#dc2626;
-
     font-size:10px;
-
     font-weight:650;
 }
-
 
 .upcoming{
-
     color:#2563eb;
-
     font-size:10px;
-
     font-weight:650;
 }
-
 
 .overdue{
-
     color:#dc2626;
-
     font-size:10px;
-
     font-weight:650;
 }
 
-
-/* =========================================================
-   DATATABLE
-========================================================= */
 
 .dataTables_wrapper
 .dataTables_filter{
-
     display:none;
 }
 
@@ -3019,10 +2804,6 @@ body{
 }
 
 
-/* =========================================================
-   RESPONSIVE
-========================================================= */
-
 @media(max-width:1100px){
 
     .date-filter-grid{
@@ -3068,10 +2849,6 @@ include(
 <div class="main-content">
 
 
-<!-- =====================================================
-     HEADER
-===================================================== -->
-
 <div class="page-header">
 
 
@@ -3112,10 +2889,6 @@ Pending:
 
 </div>
 
-
-<!-- =====================================================
-     ALERT
-===================================================== -->
 
 <?php if (
     $pendingCount > 0
@@ -3186,10 +2959,6 @@ All medication preparation tasks are completed.
 <?php endif; ?>
 
 
-<!-- =====================================================
-     CARD
-===================================================== -->
-
 <div class="preparation-card">
 
 
@@ -3206,10 +2975,6 @@ Admission medication, historical schedules, appointment prescriptions, walk-in p
 
 </div>
 
-
-<!-- =====================================================
-     DATE FILTER
-===================================================== -->
 
 <div class="date-record-box">
 
@@ -3289,10 +3054,6 @@ Clear
 </div>
 
 
-<!-- =====================================================
-     OTHER FILTER
-===================================================== -->
-
 <div class="filter-box">
 
 
@@ -3319,7 +3080,7 @@ Search
     type="text"
     id="searchInput"
     class="form-control"
-    placeholder="Search patient, medication or time..."
+    placeholder="Search patient, medication, type, location or time..."
     value="<?= h(
         $currentSearch
     ) ?>"
@@ -3426,25 +3187,25 @@ Sort
 
 
 <option
-    value="asc"
-    <?= $currentSort === 'asc'
-        ? 'selected'
-        : '' ?>
->
-
-Earliest First
-
-</option>
-
-
-<option
     value="desc"
     <?= $currentSort === 'desc'
         ? 'selected'
         : '' ?>
 >
 
-Latest First
+Newest First
+
+</option>
+
+
+<option
+    value="asc"
+    <?= $currentSort === 'asc'
+        ? 'selected'
+        : '' ?>
+>
+
+Oldest First
 
 </option>
 
@@ -3461,10 +3222,6 @@ Latest First
 </div>
 
 
-<!-- =====================================================
-     TABLE
-===================================================== -->
-
 <div class="table-responsive">
 
 
@@ -3480,27 +3237,16 @@ Latest First
 <tr>
 
 <th>No.</th>
-
 <th>Patient</th>
-
 <th>Type</th>
-
 <th>Collection</th>
-
 <th>Location</th>
-
 <th>Medication</th>
-
 <th>Dosage</th>
-
 <th>Frequency</th>
-
 <th>Scheduled</th>
-
 <th>Status</th>
-
 <th>Action</th>
-
 <th>Sort Key</th>
 
 </tr>
@@ -3616,10 +3362,6 @@ $prepStatusUpper =
     );
 
 
-/* =========================================================
-   DISPLAY STATUS
-========================================================= */
-
 if (
     $isAdmission
     &&
@@ -3714,10 +3456,6 @@ else {
         'Pending Preparation';
 }
 
-
-/* =========================================================
-   TIME INDICATOR
-========================================================= */
 
 $timeIndicator =
     '';
@@ -3834,16 +3572,8 @@ if (
 >
 
 
-<!-- =====================================================
-     NO
-===================================================== -->
-
 <td class="number-cell"></td>
 
-
-<!-- =====================================================
-     PATIENT
-===================================================== -->
 
 <td>
 
@@ -3884,10 +3614,6 @@ Discharged
 
 </td>
 
-
-<!-- =====================================================
-     TYPE
-===================================================== -->
 
 <td>
 
@@ -3968,10 +3694,6 @@ Unknown
 </td>
 
 
-<!-- =====================================================
-     COLLECTION
-===================================================== -->
-
 <td>
 
 
@@ -4006,10 +3728,6 @@ Patient Pickup
 
 </td>
 
-
-<!-- =====================================================
-     LOCATION
-===================================================== -->
 
 <td>
 
@@ -4085,10 +3803,6 @@ Take-home Medication
 </td>
 
 
-<!-- =====================================================
-     MEDICATION
-===================================================== -->
-
 <td>
 
 
@@ -4106,12 +3820,7 @@ Take-home Medication
 </td>
 
 
-<!-- =====================================================
-     DOSAGE
-===================================================== -->
-
 <td>
-
 
 <?= h(
     $row[
@@ -4120,16 +3829,10 @@ Take-home Medication
     ?? '-'
 ) ?>
 
-
 </td>
 
 
-<!-- =====================================================
-     FREQUENCY
-===================================================== -->
-
 <td>
-
 
 <?= h(
     $row[
@@ -4138,13 +3841,8 @@ Take-home Medication
     ?? '-'
 ) ?>
 
-
 </td>
 
-
-<!-- =====================================================
-     SCHEDULE
-===================================================== -->
 
 <td>
 
@@ -4318,10 +4016,6 @@ Scheduled record
 </td>
 
 
-<!-- =====================================================
-     STATUS
-===================================================== -->
-
 <td>
 
 
@@ -4470,10 +4164,6 @@ Cancelled - Discharged
 
 </td>
 
-
-<!-- =====================================================
-     ACTION
-===================================================== -->
 
 <td>
 
@@ -4754,10 +4444,6 @@ No Action
 </td>
 
 
-<!-- =====================================================
-     HIDDEN SORT KEY
-===================================================== -->
-
 <td>
 
 <?= h(
@@ -4887,6 +4573,10 @@ function()
                 '';
 
 
+            /* =============================================
+               TYPE FILTER
+            ============================================= */
+
             if (
                 selectedOrderType
                 !== ''
@@ -4899,6 +4589,10 @@ function()
                 return false;
             }
 
+
+            /* =============================================
+               DATE FILTER
+            ============================================= */
 
             if (
                 selectedRecordDate
@@ -4935,6 +4629,23 @@ function()
                     [10,25,50,100]
                 ],
 
+
+                /*
+                 * COLUMN INDEX
+                 *
+                 * 0  = No.
+                 * 1  = Patient
+                 * 2  = Type
+                 * 3  = Collection
+                 * 4  = Location
+                 * 5  = Medication
+                 * 6  = Dosage
+                 * 7  = Frequency
+                 * 8  = Scheduled
+                 * 9  = Status
+                 * 10 = Action
+                 * 11 = Hidden SORT KEY
+                 */
 
                 order:
                 [
@@ -4982,7 +4693,10 @@ function()
                             false,
 
                         searchable:
-                            false
+                            false,
+
+                        type:
+                            'string'
                     }
 
                 ],
@@ -4996,6 +4710,9 @@ function()
 
                 info:
                     true,
+
+                orderMulti:
+                    false,
 
 
                 drawCallback:
@@ -5070,6 +4787,9 @@ function()
             .search(
                 previousSearch
             )
+            .page(
+                'first'
+            )
             .draw();
     }
 
@@ -5083,9 +4803,17 @@ function()
         function()
         {
 
+            const value =
+                this.value
+                    .trim();
+
+
             table
                 .search(
-                    this.value
+                    value
+                )
+                .page(
+                    'first'
                 )
                 .draw();
         }
@@ -5107,7 +4835,11 @@ function()
                 '';
 
 
-            table.draw();
+            table
+                .page(
+                    'first'
+                )
+                .draw();
         }
     );
 
@@ -5165,7 +4897,11 @@ function()
                 today;
 
 
-            table.draw();
+            table
+                .page(
+                    'first'
+                )
+                .draw();
         }
     );
 
@@ -5187,7 +4923,11 @@ function()
                 '';
 
 
-            table.draw();
+            table
+                .page(
+                    'first'
+                )
+                .draw();
         }
     );
 
@@ -5207,7 +4947,11 @@ function()
                 '';
 
 
-            table.draw();
+            table
+                .page(
+                    'first'
+                )
+                .draw();
         }
     );
 
@@ -5221,16 +4965,167 @@ function()
         function()
         {
 
+            const direction =
+                this.value ===
+                'asc'
+                ?
+                'asc'
+                :
+                'desc';
+
+
             table
                 .order([
                     [
                         11,
-                        this.value
+                        direction
                     ]
                 ])
+                .page(
+                    'first'
+                )
                 .draw();
         }
     );
+
+
+    /* =====================================================
+       BUILD ACTION URL USING CURRENT LIVE FILTERS
+    ===================================================== */
+
+    function buildActionUrlWithCurrentFilters(
+        originalUrl
+    )
+    {
+
+        const actionUrl =
+            new URL(
+                originalUrl,
+                window.location.href
+            );
+
+
+        const liveType =
+            $('#typeFilter')
+                .val()
+            ||
+            '';
+
+
+        const liveSearch =
+            $('#searchInput')
+                .val()
+                .trim()
+            ||
+            '';
+
+
+        const liveSort =
+            $('#sortFilter')
+                .val()
+            ||
+            'desc';
+
+
+        const liveRecordDate =
+            $('#recordDateFilter')
+                .val()
+            ||
+            '';
+
+
+        /* =============================================
+           TYPE
+        ============================================= */
+
+        if (
+            liveType !== ''
+        ) {
+
+            actionUrl
+                .searchParams
+                .set(
+                    'type',
+                    liveType
+                );
+
+        }
+        else {
+
+            actionUrl
+                .searchParams
+                .delete(
+                    'type'
+                );
+        }
+
+
+        /* =============================================
+           SEARCH
+        ============================================= */
+
+        if (
+            liveSearch !== ''
+        ) {
+
+            actionUrl
+                .searchParams
+                .set(
+                    'search',
+                    liveSearch
+                );
+
+        }
+        else {
+
+            actionUrl
+                .searchParams
+                .delete(
+                    'search'
+                );
+        }
+
+
+        /* =============================================
+           SORT
+        ============================================= */
+
+        actionUrl
+            .searchParams
+            .set(
+                'sort',
+                liveSort
+            );
+
+
+        /* =============================================
+           RECORD DATE
+        ============================================= */
+
+        if (
+            liveRecordDate !== ''
+        ) {
+
+            actionUrl
+                .searchParams
+                .set(
+                    'record_date',
+                    liveRecordDate
+                );
+
+        }
+        else {
+
+            actionUrl
+                .searchParams
+                .delete(
+                    'record_date'
+                );
+        }
+
+
+        return actionUrl.toString();
+    }
 
 
     /* =====================================================
@@ -5247,7 +5142,9 @@ function()
 
 
             const url =
-                this.href;
+                buildActionUrlWithCurrentFilters(
+                    this.href
+                );
 
 
             Swal.fire({
@@ -5308,7 +5205,9 @@ function()
 
 
             const url =
-                this.href;
+                buildActionUrlWithCurrentFilters(
+                    this.href
+                );
 
 
             Swal.fire({

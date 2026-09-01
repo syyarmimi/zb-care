@@ -203,7 +203,15 @@ $recentAdmissions =
 
 
 /* =========================================================
-   PENDING MEDICATION
+   PENDING MEDICATION - FIXED
+
+   IMPORTANT:
+   Count pending medication by SCHEDULE_ID / individual dose,
+   not only MEDORDER_ID.
+
+   This prevents one administered dose from causing all
+   remaining doses under the same medication order to
+   disappear from the dashboard count.
 ========================================================= */
 
 $pendingMed =
@@ -211,43 +219,80 @@ $pendingMed =
         ->query("
 
             SELECT
-                COUNT(*)
+                COUNT(
+                    DISTINCT MS.SCHEDULE_ID
+                )
 
             FROM
-                SYARMIMI.MEDICATION_ORDER mo
+                SYARMIMI.MEDICATION_SCHEDULE MS
 
             JOIN
-                SYARMIMI.ADMISSION a
+                SYARMIMI.MEDICATION_ORDER MO
 
                 ON
-                mo.ADMISSION_ID =
-                a.ADMISSION_ID
+                    MS.MEDORDER_ID =
+                    MO.MEDORDER_ID
 
             JOIN
-                SYARMIMI.PHARMACY_PREPARATION pp
+                SYARMIMI.ADMISSION A
 
                 ON
-                mo.MEDORDER_ID =
-                pp.MEDORDER_ID
+                    MO.ADMISSION_ID =
+                    A.ADMISSION_ID
+
+            JOIN
+                SYARMIMI.PHARMACY_PREPARATION PP
+
+                ON
+                    PP.SCHEDULE_ID =
+                    MS.SCHEDULE_ID
 
             LEFT JOIN
-                SYARMIMI.MEDICATION_ADMIN ma
+                SYARMIMI.MEDICATION_ADMIN MA
 
                 ON
-                mo.MEDORDER_ID =
-                ma.MEDORDER_ID
+                    MA.SCHEDULE_ID =
+                    MS.SCHEDULE_ID
 
             WHERE
-                ma.MEDORDER_ID
+                A.DISCHARGE_DATE
                 IS NULL
 
             AND
-                pp.STATUS =
-                'Ready For Nurse Pickup'
+                UPPER(
+                    TRIM(
+                        PP.STATUS
+                    )
+                )
+                IN
+                (
+                    'READY FOR NURSE PICKUP',
+                    'COLLECTED',
+                    'COLLECTED BY NURSE'
+                )
 
             AND
-                a.DISCHARGE_DATE
+                MA.SCHEDULE_ID
                 IS NULL
+
+            AND
+                UPPER(
+                    TRIM(
+                        NVL(
+                            MS.STATUS,
+                            'Pending Preparation'
+                        )
+                    )
+                )
+                NOT IN
+                (
+                    'ADMINISTERED',
+                    'GIVEN',
+                    'DELIVERED',
+                    'COMPLETED',
+                    'CANCELLED',
+                    'CANCELLED - DISCHARGED'
+                )
 
         ")
         ->fetchColumn();
@@ -1596,7 +1641,7 @@ Patient Care Reminder
 
 <?= $pendingMed ?>
 
-medication(s) are waiting for nurse administration.
+medication dose(s) are waiting for nurse action.
 
 </div>
 
@@ -1858,7 +1903,7 @@ Pending Medication
 
 <div class="stat-description">
 
-Waiting for administration
+Waiting for nurse action
 
 </div>
 

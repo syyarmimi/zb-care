@@ -2,6 +2,16 @@
 
 session_start();
 
+/* =========================================================
+   PREVENT STALE PATIENT MANAGEMENT CACHE
+========================================================= */
+
+header("Cache-Control: no-store, no-cache, must-revalidate, max-age=0");
+header("Cache-Control: post-check=0, pre-check=0", false);
+header("Pragma: no-cache");
+header("Expires: 0");
+
+
 if (
     !isset($_SESSION['role']) ||
     !in_array($_SESSION['role'], ['doctor', 'admin'], true)
@@ -295,6 +305,8 @@ $sql = "
         P.NAME,
 
         P.IC_NUMBER,
+
+        W.QUEUE_NUMBER,
 
         W.DEPARTMENT,
 
@@ -1348,6 +1360,31 @@ body{
 
 
 /* =========================================================
+   QUEUE NUMBER
+========================================================= */
+
+.queue-badge{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    min-width:58px;
+    padding:6px 9px;
+    border-radius:7px;
+    background:#eff6ff;
+    color:#2563eb;
+    font-size:10px;
+    font-weight:700;
+    white-space:nowrap;
+}
+
+.queue-admin{
+    background:#f3f4f6;
+    color:#64748b;
+    font-weight:650;
+}
+
+
+/* =========================================================
    BADGES
 ========================================================= */
 
@@ -1375,6 +1412,11 @@ body{
 .status-admitted{
     background:#fff7ed;
     color:#c2410c;
+}
+
+.status-noshow{
+    background:#fff1f2;
+    color:#dc2626;
 }
 
 .status-pending{
@@ -2134,6 +2176,7 @@ Discharge
 <thead>
 <tr>
 <th>No.</th>
+<th>Queue No.</th>
 <th>Patient</th>
 <th>Date</th>
 <th>Department</th>
@@ -2152,6 +2195,51 @@ Discharge
 
 <td class="number-cell"></td>
 
+
+<!-- QUEUE NUMBER -->
+
+<td>
+
+<?php
+
+$queueNumber =
+    trim(
+        (string)(
+            $w['QUEUE_NUMBER']
+            ?? ''
+        )
+    );
+
+?>
+
+<?php if ($queueNumber !== ''): ?>
+
+<span class="queue-badge">
+
+<i class="bi bi-ticket-perforated me-1"></i>
+
+<?= h($queueNumber) ?>
+
+</span>
+
+<?php else: ?>
+
+<span
+    class="queue-badge queue-admin"
+    title="This walk-in record was registered manually by the administrator."
+>
+
+<i class="bi bi-person-gear me-1"></i>
+
+Admin Entry
+
+</span>
+
+<?php endif; ?>
+
+</td>
+
+
 <td>
 
 <div class="patient-name">
@@ -2168,9 +2256,13 @@ Discharge
 <?= h($w['CONSULTATION_DATE']) ?>
 </td>
 
-<td><?= h($w['DEPARTMENT'] ?: '-') ?></td>
+<td>
+<?= h($w['DEPARTMENT'] ?: '-') ?>
+</td>
 
-<td><?= h($w['DOCTOR_NAME'] ?: '-') ?></td>
+<td>
+<?= h($w['DOCTOR_NAME'] ?: '-') ?>
+</td>
 
 <td>
 
@@ -2302,6 +2394,13 @@ Admitted
 <span class="status-badge status-pending">
 <i class="bi bi-hourglass-split"></i>
 Pending
+</span>
+
+<?php elseif ($status === 'no show'): ?>
+
+<span class="status-badge status-noshow">
+<i class="bi bi-person-x"></i>
+No Show
 </span>
 
 <?php else: ?>
@@ -2813,8 +2912,20 @@ $(document).ready(function(){
                 [10,25,50,100]
             ],
 
+            /*
+             * COLUMN INDEX NOW:
+             *
+             * 0 = No.
+             * 1 = Queue No.
+             * 2 = Patient
+             * 3 = Date
+             * 4 = Department
+             * 5 = Doctor
+             * 6 = Status
+             */
+
             order:[
-                [2,'desc']
+                [3,'desc']
             ],
 
             columnDefs:[
@@ -3367,11 +3478,36 @@ function applyCurrentSort()
     }
 
 
+    /*
+     * Patient name is column 2 for Walk-In because
+     * Queue No. was added before Patient.
+     *
+     * Other tables still use column 1.
+     */
+
+    let patientNameIndex = 1;
+
+    const activeTab =
+        getActiveTab();
+
+    if (
+        activeTab
+        &&
+        activeTab.id === 'walkin'
+    ) {
+
+        patientNameIndex = 2;
+    }
+
+
     if (mode === 'asc') {
 
         table
             .order([
-                [1,'asc']
+                [
+                    patientNameIndex,
+                    'asc'
+                ]
             ])
             .draw();
 
@@ -3383,7 +3519,10 @@ function applyCurrentSort()
 
         table
             .order([
-                [1,'desc']
+                [
+                    patientNameIndex,
+                    'desc'
+                ]
             ])
             .draw();
 
@@ -3873,6 +4012,54 @@ function escapeHtml(text)
 
     return div.innerHTML;
 }
+
+
+
+/* =========================================================
+   REFRESH WHEN RETURNING WITH BROWSER BACK BUTTON
+
+   Ensures appointment status is re-read from Oracle after
+   a doctor marks an appointment as No Show.
+========================================================= */
+
+window.addEventListener(
+    'pageshow',
+    function(event)
+    {
+
+        const navigationEntries =
+            (
+                typeof performance !== 'undefined'
+                &&
+                typeof performance.getEntriesByType === 'function'
+            )
+            ?
+            performance.getEntriesByType(
+                'navigation'
+            )
+            :
+            [];
+
+
+        const returnedByBackForward =
+            navigationEntries.length > 0
+            &&
+            navigationEntries[0].type
+            ===
+            'back_forward';
+
+
+        if (
+            event.persisted
+            ||
+            returnedByBackForward
+        ) {
+
+            window.location.reload();
+        }
+
+    }
+);
 
 </script>
 

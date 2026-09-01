@@ -1,6 +1,17 @@
 <?php
 
 session_start();
+
+/* =========================================================
+   PREVENT STALE DASHBOARD CACHE
+   Keeps dashboard fresh after No Show / treatment updates.
+========================================================= */
+
+header("Cache-Control: no-store, no-cache, must-revalidate, max-age=0");
+header("Cache-Control: post-check=0, pre-check=0", false);
+header("Pragma: no-cache");
+header("Expires: 0");
+
 include("../config/config.php");
 
 
@@ -64,7 +75,6 @@ $doctorInfoStmt =
     $conn->prepare("
 
         SELECT
-
             USERNAME,
             DEPARTMENT
 
@@ -127,7 +137,7 @@ $doctorDepartment =
 
 
 /* =========================================================
-   SUCCESS MESSAGE FROM TREATMENT
+   SUCCESS MESSAGE FROM TREATMENT / NO SHOW
 ========================================================= */
 
 $successTitle =
@@ -219,7 +229,6 @@ try {
         ':doctor' => $doctor_id
     ]);
 
-
 }
 catch (Exception $e) {
 
@@ -273,7 +282,6 @@ try {
             $availabilityResult;
     }
 
-
 }
 catch (Exception $e) {
 
@@ -321,7 +329,6 @@ try {
     $newPatients =
         (int)$newCountStmt
             ->fetchColumn();
-
 
 }
 catch (Exception $e) {
@@ -434,7 +441,6 @@ try {
 
                 /* =========================================
                    TOTAL SCHEDULED DOSES
-
                    CANCELLED DOSES EXCLUDED
                 ========================================= */
 
@@ -558,7 +564,6 @@ try {
 
                 /* =========================================
                    TODAY TOTAL SCHEDULE
-
                    CANCELLED EXCLUDED
                 ========================================= */
 
@@ -709,7 +714,6 @@ try {
             PDO::FETCH_ASSOC
         );
 
-
 }
 catch (Exception $e) {
 
@@ -720,10 +724,10 @@ catch (Exception $e) {
 /* =========================================================
    UPCOMING APPOINTMENTS
 
-   Approved only.
-
-   Once doctor marks No Show, status becomes NO SHOW,
-   therefore appointment automatically disappears here.
+   IMPORTANT:
+   Only APPROVED appointments are returned.
+   A No Show appointment therefore disappears immediately
+   after treatment.php changes APPROVED -> NO SHOW.
 ========================================================= */
 
 $appointments = [];
@@ -829,7 +833,6 @@ try {
             PDO::FETCH_ASSOC
         );
 
-
 }
 catch (Exception $e) {
 
@@ -846,8 +849,15 @@ $totalAppointmentPatients =
 /* =========================================================
    TODAY APPOINTMENT + WALK-IN
 
-   IMPORTANT:
-   Approved appointments only.
+   Appointment:
+   - Today only
+   - APPROVED only
+   - No diagnosis yet
+
+   Walk-In:
+   - Today only
+   - ASSIGNED only
+   - No diagnosis yet
 
    No Show automatically disappears because its status
    changes from Approved -> No Show.
@@ -995,6 +1005,15 @@ try {
                 =
                 'ASSIGNED'
 
+            AND
+                TRUNC(
+                    W.CONSULTATION_DATE
+                )
+                =
+                TRUNC(
+                    SYSDATE
+                )
+
             AND NOT EXISTS
             (
                 SELECT
@@ -1029,7 +1048,6 @@ try {
             ->fetchAll(
                 PDO::FETCH_ASSOC
             );
-
 
 }
 catch (Exception $e) {
@@ -1075,7 +1093,6 @@ try {
     $inpatientCount =
         (int)$inpatientStmt
             ->fetchColumn();
-
 
 }
 catch (Exception $e) {
@@ -1159,7 +1176,6 @@ try {
         (int)$outpatientStmt
             ->fetchColumn();
 
-
 }
 catch (Exception $e) {
 
@@ -1169,10 +1185,6 @@ catch (Exception $e) {
 
 /* =========================================================
    TOTAL NO SHOW
-
-   NEW:
-   Show doctor how many assigned appointments
-   were marked as No Show.
 ========================================================= */
 
 $totalNoShow = 0;
@@ -1213,7 +1225,6 @@ try {
     $totalNoShow =
         (int)$noShowCountStmt
             ->fetchColumn();
-
 
 }
 catch (Exception $e) {
@@ -1256,7 +1267,6 @@ try {
         (int)$totalDiagnosisStmt
             ->fetchColumn();
 
-
 }
 catch (Exception $e) {
 
@@ -1298,7 +1308,6 @@ try {
         (int)$totalMedicationStmt
             ->fetchColumn();
 
-
 }
 catch (Exception $e) {
 
@@ -1334,7 +1343,6 @@ try {
     $seenStmt->execute([
         ':doctor' => $doctor_id
     ]);
-
 
 }
 catch (Exception $e) {
@@ -4529,6 +4537,55 @@ updateLiveClock();
 setInterval(
     updateLiveClock,
     1000
+);
+
+
+/* =========================================================
+   REFRESH WHEN RETURNING WITH BROWSER BACK / FORWARD
+
+   This is important for No Show.
+   Chrome can restore the old dashboard from BFCache.
+   When that happens, reload once so the latest Oracle
+   appointment status is shown.
+========================================================= */
+
+window.addEventListener(
+    'pageshow',
+    function(event)
+    {
+
+        const navigationEntries =
+            (
+                typeof performance !== 'undefined'
+                &&
+                typeof performance.getEntriesByType === 'function'
+            )
+            ?
+            performance.getEntriesByType(
+                'navigation'
+            )
+            :
+            [];
+
+
+        const returnedByBackForward =
+            navigationEntries.length > 0
+            &&
+            navigationEntries[0].type
+            ===
+            'back_forward';
+
+
+        if (
+            event.persisted
+            ||
+            returnedByBackForward
+        ) {
+
+            window.location.reload();
+        }
+
+    }
 );
 
 </script>

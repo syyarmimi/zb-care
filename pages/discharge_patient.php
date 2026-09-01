@@ -56,6 +56,10 @@ function h($value)
    - Paediatric ward          : RM 150.00/day
    - Neurology ward           : RM 220.00/day
    - Medication               : MEDICATION.PRICE
+
+   IMPORTANT:
+   BILL table DOES NOT contain BILL_TYPE.
+   Admission bills are identified using ADMISSION_ID.
 ========================================================= */
 
 function getAdmissionWardRate(string $wardName): float
@@ -209,7 +213,10 @@ function generateAdmissionBill(
 
 
     /* =====================================================
-       CREATE BILL HEADER
+       CREATE BILL HEADER - FIXED
+
+       BILL_TYPE REMOVED because it does not exist in
+       SYARMIMI.BILL.
     ===================================================== */
 
     $insertBill =
@@ -221,7 +228,6 @@ function generateAdmissionBill(
                 APPOINTMENT_ID,
                 CONSULTATION_ID,
                 ADMISSION_ID,
-                BILL_TYPE,
                 BILL_DATE,
                 TOTAL_AMOUNT,
                 STATUS
@@ -233,7 +239,6 @@ function generateAdmissionBill(
                 ?,
                 ?,
                 ?,
-                'ADMISSION',
                 SYSDATE,
                 0,
                 'Unpaid'
@@ -261,6 +266,10 @@ function generateAdmissionBill(
         );
     }
 
+
+    /* =====================================================
+       PREPARE BILL ITEM INSERT
+    ===================================================== */
 
     $insertItem =
         $conn->prepare("
@@ -300,8 +309,7 @@ function generateAdmissionBill(
 
     if ($appointmentId) {
 
-        $consultationFee =
-            100.00;
+        $consultationFee = 100.00;
 
         $insertItem->execute([
             $billId,
@@ -313,14 +321,12 @@ function generateAdmissionBill(
             null
         ]);
 
-        $total +=
-            $consultationFee;
+        $total += $consultationFee;
 
     }
     elseif ($consultationId) {
 
-        $consultationFee =
-            120.00;
+        $consultationFee = 120.00;
 
         $insertItem->execute([
             $billId,
@@ -332,13 +338,13 @@ function generateAdmissionBill(
             null
         ]);
 
-        $total +=
-            $consultationFee;
+        $total += $consultationFee;
     }
 
 
     /* =====================================================
        WARD CHARGE
+
        Inclusive calendar days, minimum one chargeable day.
     ===================================================== */
 
@@ -388,8 +394,7 @@ function generateAdmissionBill(
         null
     ]);
 
-    $total +=
-        $wardSubtotal;
+    $total += $wardSubtotal;
 
 
     /* =====================================================
@@ -399,9 +404,7 @@ function generateAdmissionBill(
        quantity = number of actual administrations.
 
        Syrup / liquid / injection / powder:
-       quantity = 1 dispensed item per medication order
-       because the current schema does not store bottle,
-       vial or volume quantity.
+       quantity = 1 dispensed item per medication order.
 
        If no administration row exists, quantity defaults to 1.
     ===================================================== */
@@ -556,8 +559,7 @@ function generateAdmissionBill(
         ]);
 
 
-        $total +=
-            $subtotal;
+        $total += $subtotal;
     }
 
 
@@ -565,9 +567,8 @@ function generateAdmissionBill(
        DISCHARGE / TAKE-HOME MEDICATION
 
        These orders have ADMISSION_ID = NULL by design.
-       Their MEDORDER_ID values are captured while this
-       discharge transaction creates them, so they can still
-       be included in this final admission bill.
+       MEDORDER_ID values created during this discharge are
+       passed into this billing function.
     ===================================================== */
 
     if (
@@ -633,8 +634,8 @@ function generateAdmissionBill(
 
             /*
                Current discharge form has no quantity/duration
-               fields, therefore each take-home medication
-               prescription is billed once.
+               field, so each take-home medication prescription
+               is billed once.
             */
 
             $quantity = 1;
@@ -697,8 +698,7 @@ function generateAdmissionBill(
             ]);
 
 
-            $total +=
-                $subtotal;
+            $total += $subtotal;
         }
     }
 
@@ -722,7 +722,11 @@ function generateAdmissionBill(
     ]);
 
 
-    /* Oracle ODBC rowCount() is not used for verification. */
+    /* =====================================================
+       VERIFY BILL
+
+       Oracle ODBC rowCount() is intentionally not used.
+    ===================================================== */
 
     $verifyTotal =
         $conn->prepare("
@@ -1346,17 +1350,11 @@ if (
             /* =================================================
                6. CREATE DISCHARGE MEDICATION
 
-               IMPORTANT:
                ADMISSION_ID = NULL
                ORDER_TYPE   = DISCHARGE
                NO MEDICATION_SCHEDULE
             ================================================= */
 
-            /*
-               Keep the MEDORDER_ID values created during this
-               discharge so the take-home medication can be
-               included in the final admission bill.
-            */
             $dischargeCreatedMedOrderIds = [];
 
             for (
@@ -1384,10 +1382,7 @@ if (
                     );
 
 
-                /*
-                   Completely blank row:
-                   ignore it.
-                */
+                /* Completely blank row - ignore */
 
                 if (
                     $medicationId <= 0
@@ -1452,9 +1447,6 @@ if (
 
                 /* =============================================
                    GENERATE MEDORDER ID
-
-                   Existing schema has no confirmed
-                   MEDICATION_ORDER sequence.
                 ============================================= */
 
                 $medOrderId =
@@ -1633,12 +1625,6 @@ if (
 
             /* =================================================
                9. GENERATE FINAL ADMISSION BILL
-
-               IMPORTANT:
-               This happens only AFTER DISCHARGE_DATE has been
-               recorded. If billing fails, the whole transaction
-               rolls back so discharge and billing remain
-               consistent.
             ================================================= */
 
             $generatedBillId =

@@ -401,76 +401,46 @@ function generateMedicationSchedule(
     string $endDate,
     string $frequency
 ) {
-
-    $times =
-        getMedicationTimes(
-            $frequency
-        );
-
+    $times = getMedicationTimes($frequency);
 
     if (empty($times)) {
         return;
     }
 
+    $start = DateTime::createFromFormat('!Y-m-d', $startDate);
+    $end   = DateTime::createFromFormat('!Y-m-d', $endDate);
 
-    try {
-
-        $start =
-            new DateTime(
-                $startDate
-            );
-
-
-        $end =
-            new DateTime(
-                $endDate
-            );
-
+    if (!$start || !$end ||
+        $start->format('Y-m-d') !== $startDate ||
+        $end->format('Y-m-d') !== $endDate) {
+        throw new Exception("Invalid medication schedule date.");
     }
-    catch (Exception $e) {
-
-        throw new Exception(
-            "Invalid medication schedule date."
-        );
-    }
-
 
     if ($end < $start) {
-
         throw new Exception(
             "Medication end date cannot be earlier than its start date."
         );
     }
 
+    $endInclusive = clone $end;
+    $endInclusive->modify('+1 day');
 
-    /*
-     Include expected discharge/end date.
-    */
-
-    $endInclusive =
-        clone $end;
-
-
-    $endInclusive->modify(
-        '+1 day'
+    $period = new DatePeriod(
+        $start,
+        new DateInterval('P1D'),
+        $endInclusive
     );
 
+    foreach ($period as $date) {
+        $scheduleOffset = (int)$start->diff($date)->format('%a');
 
-    $period =
-        new DatePeriod(
-            $start,
-            new DateInterval(
-                'P1D'
-            ),
-            $endInclusive
-        );
-
-
-    $insertSchedule =
-        $conn->prepare("
-
-            INSERT INTO
-                SYARMIMI.MEDICATION_SCHEDULE
+        /*
+         * Oracle PDO_ODBC can bind numeric placeholders as strings.
+         * SCHEDULE_DATE is a real DATE column, therefore the validated
+         * integer offset is embedded directly into DATE arithmetic.
+         */
+        $sql = "
+            INSERT INTO SYARMIMI.MEDICATION_SCHEDULE
             (
                 SCHEDULE_ID,
                 MEDORDER_ID,
@@ -478,41 +448,21 @@ function generateMedicationSchedule(
                 SCHEDULE_TIME,
                 STATUS
             )
-
             VALUES
             (
-                SYARMIMI.MEDICATION_SCHEDULE_SEQ.NEXTVAL,
+                (SELECT NVL(MAX(SCHEDULE_ID), 0) + 1
+                   FROM SYARMIMI.MEDICATION_SCHEDULE),
                 ?,
-                TRUNC(SYSDATE) + ?,
+                TRUNC(SYSDATE) + $scheduleOffset,
                 ?,
                 'Pending Preparation'
             )
+        ";
 
-        ");
-
-
-    foreach (
-        $period
-        as
-        $date
-    ) {
-
-        /*
-         * Avoid TO_DATE(?) through PDO_ODBC.  Oracle receives only a
-         * numeric day offset, so NLS/date-string conversion cannot fail.
-         */
-        $scheduleOffset = (int)$start->diff($date)->format('%a');
-
-
-        foreach (
-            $times
-            as
-            $time
-        ) {
-
-            $insertSchedule->execute([
+        foreach ($times as $time) {
+            $stmt = $conn->prepare($sql);
+            $stmt->execute([
                 $medorderId,
-                $scheduleOffset,
                 $time
             ]);
         }
@@ -610,594 +560,6 @@ function regenerateMedicationSchedule(
             $frequency
         );
     }
-}
-
-
-
-/* =========================================================
-   OUTPATIENT BILLING
-
-   Billing rules:
-   - Appointment consultation = RM 100.00
-   - Walk-In consultation     = RM 120.00
-   - Each prescribed outpatient medication is charged once
-     using MEDICATION.PRICE.
-   - Admit Patient does NOT generate a bill here.
-     Admission billing will be generated only on discharge.
-========================================================= */
-
-function generateOutpatientBill(
-    PDO $conn,
-    int $patientId,
-    ?int $appointmentId,
-    ?int $consultationId,
-    string $encounterType
-): int {
-
-    $encounterType =
-        strtoupper(
-            trim(
-                $encounterType
-            )
-        );
-
-
-    if (
-        !in_array(
-            $encounterType,
-            [
-                'APPOINTMENT',
-                'WALKIN'
-            ],
-            true
-        )
-    ) {
-        throw new Exception(
-            "Invalid outpatient billing type."
-        );
-    }
-
-
-    /* =====================================================
-       PREVENT DUPLICATE BILL
-    ===================================================== */
-
-    if (
-        $encounterType ===
-        'APPOINTMENT'
-    ) {
-
-        if (
-            !$appointmentId
-        ) {
-            throw new Exception(
-                "Appointment ID is required for billing."
-            );
-        }
-
-
-        $existingBillStmt =
-            $conn->prepare("
-
-                SELECT
-                    BILL_ID
-
-                FROM
-                    SYARMIMI.BILL
-
-                WHERE
-                    APPOINTMENT_ID = ?
-
-                FETCH FIRST
-                    1 ROW ONLY
-
-            ");
-
-
-        $existingBillStmt->execute([
-            $appointmentId
-        ]);
-
-    }
-    else {
-
-        if (
-            !$consultationId
-        ) {
-            throw new Exception(
-                "Consultation ID is required for billing."
-            );
-        }
-
-
-        $existingBillStmt =
-            $conn->prepare("
-
-                SELECT
-                    BILL_ID
-
-                FROM
-                    SYARMIMI.BILL
-
-                WHERE
-                    CONSULTATION_ID = ?
-
-                FETCH FIRST
-                    1 ROW ONLY
-
-            ");
-
-
-        $existingBillStmt->execute([
-            $consultationId
-        ]);
-    }
-
-
-    $existingBillId =
-        $existingBillStmt
-            ->fetchColumn();
-
-
-    if ($existingBillId) {
-
-        return (int)$existingBillId;
-    }
-
-
-    /* =====================================================
-       CONSULTATION CHARGE
-    ===================================================== */
-
-    if (
-        $encounterType ===
-        'APPOINTMENT'
-    ) {
-
-        $consultationFee =
-            100.00;
-
-
-        $consultationDescription =
-            'Specialist Appointment Consultation';
-
-    }
-    else {
-
-        $consultationFee =
-            120.00;
-
-
-        $consultationDescription =
-            'Walk-In Specialist Consultation';
-    }
-
-
-    /* =====================================================
-       CREATE BILL
-    ===================================================== */
-
-    $insertBill =
-        $conn->prepare("
-
-            INSERT INTO
-                SYARMIMI.BILL
-            (
-                BILL_ID,
-                PATIENT_ID,
-                APPOINTMENT_ID,
-                CONSULTATION_ID,
-                ADMISSION_ID,
-                BILL_DATE,
-                TOTAL_AMOUNT,
-                STATUS
-            )
-
-            VALUES
-            (
-                SYARMIMI.BILL_SEQ.NEXTVAL,
-                ?,
-                ?,
-                ?,
-                NULL,
-                SYSDATE,
-                0,
-                'Unpaid'
-            )
-
-        ");
-
-
-    $insertBill->execute([
-
-        $patientId,
-
-        $appointmentId,
-
-        $consultationId
-
-    ]);
-
-
-    $billId =
-        (int)$conn
-            ->query("
-
-                SELECT
-                    SYARMIMI.BILL_SEQ.CURRVAL
-
-                FROM
-                    DUAL
-
-            ")
-            ->fetchColumn();
-
-
-    if (
-        $billId <= 0
-    ) {
-
-        throw new Exception(
-            "Unable to create patient bill."
-        );
-    }
-
-
-    /* =====================================================
-       CONSULTATION BILL ITEM
-    ===================================================== */
-
-    $insertBillItem =
-        $conn->prepare("
-
-            INSERT INTO
-                SYARMIMI.BILL_ITEM
-            (
-                BILL_ITEM_ID,
-                BILL_ID,
-                ITEM_TYPE,
-                DESCRIPTION,
-                QUANTITY,
-                UNIT_PRICE,
-                SUBTOTAL,
-                MEDORDER_ID
-            )
-
-            VALUES
-            (
-                SYARMIMI.BILL_ITEM_SEQ.NEXTVAL,
-                ?,
-                ?,
-                ?,
-                ?,
-                ?,
-                ?,
-                ?
-            )
-
-        ");
-
-
-    $insertBillItem->execute([
-
-        $billId,
-
-        'CONSULTATION',
-
-        $consultationDescription,
-
-        1,
-
-        $consultationFee,
-
-        $consultationFee,
-
-        null
-
-    ]);
-
-
-    /* =====================================================
-       OUTPATIENT MEDICATIONS
-
-       Current treatment form does not store a supplied
-       quantity/duration for outpatient prescriptions.
-       Therefore each prescribed medication is billed as
-       one dispensed item using MEDICATION.PRICE.
-    ===================================================== */
-
-    if (
-        $encounterType ===
-        'APPOINTMENT'
-    ) {
-
-        $medicationBillStmt =
-            $conn->prepare("
-
-                SELECT
-
-                    MO.MEDORDER_ID,
-
-                    M.MEDICATION_NAME,
-
-                    NVL(
-                        M.PRICE,
-                        0
-                    )
-                    AS UNIT_PRICE,
-
-                    MO.DOSAGE,
-
-                    MO.FREQUENCY
-
-                FROM
-                    SYARMIMI.MEDICATION_ORDER MO
-
-                JOIN
-                    SYARMIMI.MEDICATION M
-
-                    ON
-                    MO.MEDICATION_ID =
-                    M.MEDICATION_ID
-
-                WHERE
-                    MO.APPOINTMENT_ID = ?
-
-                AND
-                    MO.ADMISSION_ID
-                    IS NULL
-
-                ORDER BY
-                    MO.MEDORDER_ID
-
-            ");
-
-
-        $medicationBillStmt->execute([
-            $appointmentId
-        ]);
-
-    }
-    else {
-
-        $medicationBillStmt =
-            $conn->prepare("
-
-                SELECT
-
-                    MO.MEDORDER_ID,
-
-                    M.MEDICATION_NAME,
-
-                    NVL(
-                        M.PRICE,
-                        0
-                    )
-                    AS UNIT_PRICE,
-
-                    MO.DOSAGE,
-
-                    MO.FREQUENCY
-
-                FROM
-                    SYARMIMI.MEDICATION_ORDER MO
-
-                JOIN
-                    SYARMIMI.MEDICATION M
-
-                    ON
-                    MO.MEDICATION_ID =
-                    M.MEDICATION_ID
-
-                WHERE
-                    MO.CONSULTATION_ID = ?
-
-                AND
-                    MO.ADMISSION_ID
-                    IS NULL
-
-                ORDER BY
-                    MO.MEDORDER_ID
-
-            ");
-
-
-        $medicationBillStmt->execute([
-            $consultationId
-        ]);
-    }
-
-
-    $medicationBillRows =
-        $medicationBillStmt
-            ->fetchAll(
-                PDO::FETCH_ASSOC
-            );
-
-
-    foreach (
-        $medicationBillRows
-        as
-        $medicationRow
-    ) {
-
-        $medicationName =
-            trim(
-                (string)(
-                    $medicationRow[
-                        'MEDICATION_NAME'
-                    ]
-                    ?? 'Medication'
-                )
-            );
-
-
-        $dosage =
-            trim(
-                (string)(
-                    $medicationRow[
-                        'DOSAGE'
-                    ]
-                    ?? ''
-                )
-            );
-
-
-        $frequency =
-            trim(
-                (string)(
-                    $medicationRow[
-                        'FREQUENCY'
-                    ]
-                    ?? ''
-                )
-            );
-
-
-        $unitPrice =
-            (float)(
-                $medicationRow[
-                    'UNIT_PRICE'
-                ]
-                ?? 0
-            );
-
-
-        $description =
-            $medicationName;
-
-
-        $instructionParts =
-            [];
-
-
-        if (
-            $dosage !== ''
-        ) {
-
-            $instructionParts[] =
-                $dosage;
-        }
-
-
-        if (
-            $frequency !== ''
-        ) {
-
-            $instructionParts[] =
-                $frequency;
-        }
-
-
-        if (
-            !empty(
-                $instructionParts
-            )
-        ) {
-
-            $description .=
-                ' (' .
-                implode(
-                    ', ',
-                    $instructionParts
-                )
-                .
-                ')';
-        }
-
-
-        $quantity =
-            1;
-
-
-        $subtotal =
-            $unitPrice
-            *
-            $quantity;
-
-
-        $insertBillItem->execute([
-
-            $billId,
-
-            'MEDICATION',
-
-            $description,
-
-            $quantity,
-
-            $unitPrice,
-
-            $subtotal,
-
-            (int)$medicationRow[
-                'MEDORDER_ID'
-            ]
-
-        ]);
-    }
-
-
-    /* =====================================================
-       CALCULATE FINAL BILL TOTAL
-    ===================================================== */
-
-    $totalStmt =
-        $conn->prepare("
-
-            SELECT
-
-                NVL(
-                    SUM(
-                        SUBTOTAL
-                    ),
-                    0
-                )
-
-            FROM
-                SYARMIMI.BILL_ITEM
-
-            WHERE
-                BILL_ID = ?
-
-        ");
-
-
-    $totalStmt->execute([
-        $billId
-    ]);
-
-
-    $totalAmount =
-        (float)$totalStmt
-            ->fetchColumn();
-
-
-    $updateBill =
-        $conn->prepare("
-
-            UPDATE
-                SYARMIMI.BILL
-
-            SET
-                TOTAL_AMOUNT = ?
-
-            WHERE
-                BILL_ID = ?
-
-        ");
-
-
-    $updateBill->execute([
-
-        $totalAmount,
-
-        $billId
-
-    ]);
-
-
-    return $billId;
 }
 
 
@@ -1927,6 +1289,7 @@ catch (Exception $e) {
 
 $myAdmissions = [];
 
+
 try {
 
     $admissionStmt =
@@ -1935,82 +1298,95 @@ try {
             SELECT
 
                 A.ADMISSION_ID,
+
                 A.PATIENT_ID,
+
                 A.BED_ID,
 
                 TO_CHAR(
                     A.ADMISSION_DATE,
                     'DD-MON-RR'
-                ) AS ADMISSION_DATE_DISPLAY,
+                )
+                AS ADMISSION_DATE_DISPLAY,
 
                 TO_CHAR(
                     A.EXPECTED_DISCHARGE_DATE,
                     'DD-MON-RR'
-                ) AS EXPECTED_DATE_DISPLAY,
+                )
+                AS EXPECTED_DATE_DISPLAY,
 
                 TO_CHAR(
                     A.EXPECTED_DISCHARGE_DATE,
                     'YYYY-MM-DD'
-                ) AS EXPECTED_DATE_VALUE,
+                )
+                AS EXPECTED_DATE_VALUE,
 
                 CASE
                     WHEN A.EXPECTED_DISCHARGE_DATE IS NOT NULL
-                    THEN GREATEST(
-                        1,
-                        TRUNC(A.EXPECTED_DISCHARGE_DATE)
-                        - TRUNC(A.ADMISSION_DATE)
-                        + 1
-                    )
-                    ELSE GREATEST(
-                        1,
-                        TRUNC(SYSDATE)
-                        - TRUNC(A.ADMISSION_DATE)
-                        + 1
-                    )
+                    THEN GREATEST(1, TRUNC(A.EXPECTED_DISCHARGE_DATE) - TRUNC(A.ADMISSION_DATE) + 1)
+                    ELSE GREATEST(1, TRUNC(SYSDATE) - TRUNC(A.ADMISSION_DATE) + 1)
                 END AS STAY_DAYS,
 
                 CASE
-                    WHEN A.EXPECTED_DISCHARGE_DATE IS NULL
-                    THEN 'CURRENT'
+                    WHEN A.EXPECTED_DISCHARGE_DATE IS NULL THEN 'CURRENT'
                     ELSE 'PLANNED'
                 END AS STAY_TYPE,
 
                 CASE
                     WHEN A.EXPECTED_DISCHARGE_DATE IS NOT NULL
-                    AND TRUNC(SYSDATE) < TRUNC(A.EXPECTED_DISCHARGE_DATE)
-                    THEN 1
-                    ELSE 0
+                     AND TRUNC(SYSDATE) < TRUNC(A.EXPECTED_DISCHARGE_DATE)
+                    THEN 1 ELSE 0
                 END AS IS_EARLY_DISCHARGE,
 
-                P.NAME AS PATIENT_NAME,
+                P.NAME
+                AS PATIENT_NAME,
+
                 B.BED_NUMBER,
+
                 W.WARD_NAME
 
-            FROM SYARMIMI.ADMISSION A
+            FROM
+                SYARMIMI.ADMISSION A
 
-            JOIN SYARMIMI.PATIENT P
-                ON A.PATIENT_ID = P.PATIENT_ID
+            JOIN
+                SYARMIMI.PATIENT P
 
-            JOIN SYARMIMI.BED B
-                ON A.BED_ID = B.BED_ID
+                ON
+                A.PATIENT_ID =
+                P.PATIENT_ID
 
-            JOIN SYARMIMI.WARD W
-                ON B.WARD_ID = W.WARD_ID
+            JOIN
+                SYARMIMI.BED B
+
+                ON
+                A.BED_ID =
+                B.BED_ID
+
+            JOIN
+                SYARMIMI.WARD W
+
+                ON
+                B.WARD_ID =
+                W.WARD_ID
 
             WHERE
                 A.ACCOUNT_ID = ?
 
             AND
-                A.DISCHARGE_DATE IS NULL
+                A.DISCHARGE_DATE
+                IS NULL
 
             ORDER BY
-                A.ADMISSION_DATE DESC
+                A.ADMISSION_DATE
+                DESC
 
         ");
+
 
     $admissionStmt->execute([
         $doctor_id
     ]);
+
 
     $myAdmissions =
         $admissionStmt->fetchAll(
@@ -2021,12 +1397,6 @@ try {
 catch (Exception $e) {
 
     $myAdmissions = [];
-
-    if ($errorMessage === '') {
-        $errorMessage =
-            "Unable to load current admitted patients: "
-            . $e->getMessage();
-    }
 }
 
 
@@ -2071,10 +1441,6 @@ if (
 
 
         $expectedDate =
-            null;
-
-
-        $generatedBillId =
             null;
 
 
@@ -2567,7 +1933,7 @@ if (
                         ?,
                         ?,
                         0,
-                        TRUNC(SYSDATE) + ?
+                        TRUNC(SYSDATE) + $expectedDays
                     )
 
                 ");
@@ -2581,9 +1947,7 @@ if (
 
                 $bed_id,
 
-                $doctor_id,
-
-                $expectedDays
+                $doctor_id
 
             ]);
 
@@ -3071,7 +2435,7 @@ if (
                                         ),
 
                                     MED_END_DATE =
-                                        TRUNC(SYSDATE) + ?,
+                                        TRUNC(SYSDATE) + $expectedDays,
 
                                     DOSAGE = ?,
 
@@ -3086,8 +2450,6 @@ if (
                         $updateExisting->execute([
 
                             $admission_id,
-
-                            $expectedDays,
 
                             $dosage,
 
@@ -3185,7 +2547,7 @@ if (
                                 TRUNC(
                                     SYSDATE
                                 ),
-                                TRUNC(SYSDATE) + ?
+                                TRUNC(SYSDATE) + $expectedDays
                             )
 
                         ");
@@ -3209,9 +2571,7 @@ if (
 
                         $frequency,
 
-                        $doctor_id,
-
-                        $expectedDays
+                        $doctor_id
 
                     ]);
 
@@ -4075,82 +3435,16 @@ if (
 
 
         /* =================================================
-           OUTPATIENT BILL
-
-           Generate bill for:
-           - Completed
-           - Next Appointment
-
-           Do NOT generate bill for Admit Patient.
-           Admission bill will be generated after discharge.
-        ================================================= */
-
-        if (
-            $decision ===
-            'Completed'
-            ||
-            $decision ===
-            'Next Appointment'
-        ) {
-
-            $generatedBillId =
-                generateOutpatientBill(
-
-                    $conn,
-
-                    (int)$patient_id,
-
-                    $appointment_id
-                        ?
-                        (int)$appointment_id
-                        :
-                        null,
-
-                    $consultation_id
-                        ?
-                        (int)$consultation_id
-                        :
-                        null,
-
-                    $type ===
-                    'appointment'
-                        ?
-                        'APPOINTMENT'
-                        :
-                        'WALKIN'
-
-                );
-        }
-
-
-        /* =================================================
            COMMIT
         ================================================= */
 
         $conn->commit();
 
 
-        if (
-            $generatedBillId
-        ) {
-
-            $_SESSION[
-                'success_message'
-            ] =
-                "Diagnosis and treatment saved successfully. Bill #"
-                .
-                $generatedBillId
-                .
-                " has been generated.";
-
-        }
-        else {
-
-            $_SESSION[
-                'success_message'
-            ] =
-                "Diagnosis and treatment saved successfully.";
-        }
+        $_SESSION[
+            'success_message'
+        ] =
+            "Diagnosis and treatment saved successfully.";
 
 
         header(
@@ -4664,84 +3958,19 @@ textarea.form-control{
 }
 
 
-
 /* =========================================================
    ADMITTED PATIENT ACTIONS
 ========================================================= */
-
-.admission-action-group{
-    display:flex;
-    align-items:center;
-    gap:6px;
-    flex-wrap:wrap;
-}
-
-.admission-action-btn{
-    display:inline-flex;
-    align-items:center;
-    justify-content:center;
-    gap:5px;
-    padding:7px 10px;
-    border-radius:8px;
-    font-size:11px;
-    font-weight:650;
-    text-decoration:none;
-    white-space:nowrap;
-    transition:.2s ease;
-}
-
-.btn-review-patient{
-    color:#047857;
-    background:#ecfdf5;
-    border:1px solid #a7f3d0;
-}
-
-.btn-review-patient:hover{
-    color:#065f46;
-    background:#d1fae5;
-}
-
-.btn-manage-stay{
-    color:#2563eb;
-    background:#eff6ff;
-    border:1px solid #bfdbfe;
-}
-
-.btn-manage-stay:hover{
-    color:#1d4ed8;
-    background:#dbeafe;
-}
-
-.btn-discharge-patient{
-    color:#dc2626;
-    background:#fef2f2;
-    border:1px solid #fecaca;
-}
-
-.btn-discharge-patient:hover{
-    color:#b91c1c;
-    background:#fee2e2;
-}
-
-.no-date{
-    display:inline-flex;
-    align-items:center;
-    gap:5px;
-    color:#d97706;
-    font-size:11px;
-    font-weight:650;
-}
-
-.stay-badge{
-    display:inline-flex;
-    align-items:center;
-    padding:5px 8px;
-    border-radius:999px;
-    background:#ecfdf5;
-    color:#047857;
-    font-size:10px;
-    font-weight:700;
-}
+.admission-action-group{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+.admission-action-btn{display:inline-flex;align-items:center;justify-content:center;gap:5px;padding:7px 10px;border-radius:8px;font-size:11px;font-weight:650;text-decoration:none;white-space:nowrap;transition:.2s ease;}
+.btn-review-patient{color:#047857;background:#ecfdf5;border:1px solid #a7f3d0;}
+.btn-review-patient:hover{color:#065f46;background:#d1fae5;}
+.btn-manage-stay{color:#2563eb;background:#eff6ff;border:1px solid #bfdbfe;}
+.btn-manage-stay:hover{color:#1d4ed8;background:#dbeafe;}
+.btn-discharge-patient{color:#dc2626;background:#fef2f2;border:1px solid #fecaca;}
+.btn-discharge-patient:hover{color:#b91c1c;background:#fee2e2;}
+.no-date{display:inline-flex;align-items:center;gap:5px;color:#d97706;font-size:11px;font-weight:650;}
+.stay-badge{display:inline-flex;align-items:center;padding:5px 8px;border-radius:999px;background:#ecfdf5;color:#047857;font-size:10px;font-weight:700;}
 
 
 /* =========================================================
@@ -5170,30 +4399,19 @@ No patients in today's queue.
 ================================================= -->
 
 <div class="card-box">
-
 <div class="d-flex justify-content-between align-items-center mb-3">
-
 <div class="section-title mb-0">
-
 <i class="bi bi-hospital"></i>
-
 My Current Admitted Patients
-
 </div>
-
 <span class="badge bg-success rounded-pill px-3 py-2">
 <?= count($myAdmissions) ?> Active
 </span>
-
 </div>
 
-
 <div class="table-responsive">
-
 <table class="table">
-
 <thead>
-
 <tr>
 <th>Patient</th>
 <th>Ward</th>
@@ -5203,138 +4421,74 @@ My Current Admitted Patients
 <th>Stay</th>
 <th>Action</th>
 </tr>
-
 </thead>
-
 <tbody>
 
 <?php if (!empty($myAdmissions)): ?>
-
 <?php foreach ($myAdmissions as $admission): ?>
 
 <tr>
+<td><strong><?= h($admission['PATIENT_NAME']) ?></strong></td>
+<td><?= h($admission['WARD_NAME']) ?></td>
+<td><span class="badge bg-secondary">Bed <?= h($admission['BED_NUMBER']) ?></span></td>
+<td><?= h($admission['ADMISSION_DATE_DISPLAY']) ?></td>
 
 <td>
-<strong>
-<?= h($admission['PATIENT_NAME']) ?>
-</strong>
-</td>
-
-<td>
-<?= h($admission['WARD_NAME']) ?>
-</td>
-
-<td>
-<span class="badge bg-secondary">
-Bed <?= h($admission['BED_NUMBER']) ?>
-</span>
-</td>
-
-<td>
-<?= h($admission['ADMISSION_DATE_DISPLAY']) ?>
-</td>
-
-<td>
-
 <?php if (!empty($admission['EXPECTED_DATE_VALUE'])): ?>
-
-<strong>
-<?= h($admission['EXPECTED_DATE_DISPLAY']) ?>
-</strong>
-
+<strong><?= h($admission['EXPECTED_DATE_DISPLAY']) ?></strong>
 <?php else: ?>
-
-<span class="no-date">
-<i class="bi bi-exclamation-circle"></i>
-Not Set
-</span>
-
+<span class="no-date"><i class="bi bi-exclamation-circle"></i> Not Set</span>
 <?php endif; ?>
-
 </td>
 
 <td>
-
 <span class="stay-badge">
 <?= max(1, (int)($admission['STAY_DAYS'] ?? 1)) ?> day(s)
 </span>
-
 <div class="text-muted mt-1" style="font-size:10px;">
-<?= (($admission['STAY_TYPE'] ?? '') === 'PLANNED')
-    ? 'Planned stay'
-    : 'Current stay'
-?>
+<?= (($admission['STAY_TYPE'] ?? '') === 'PLANNED') ? 'Planned stay' : 'Current stay' ?>
 </div>
-
 </td>
 
 <td>
-
 <div class="admission-action-group">
 
-<a
-    href="patient_review.php?admission_id=<?= (int)$admission['ADMISSION_ID'] ?>"
-    class="admission-action-btn btn-review-patient"
->
-<i class="bi bi-clipboard2-pulse"></i>
-Review
+<a href="patient_review.php?admission_id=<?= (int)$admission['ADMISSION_ID'] ?>"
+   class="admission-action-btn btn-review-patient">
+<i class="bi bi-clipboard2-pulse"></i> Review
 </a>
 
-<a
-    href="extend_admission.php?admission_id=<?= (int)$admission['ADMISSION_ID'] ?>"
-    class="admission-action-btn btn-manage-stay"
->
-<i class="bi <?= !empty($admission['EXPECTED_DATE_VALUE'])
-    ? 'bi-calendar-plus'
-    : 'bi-calendar-check'
-?>"></i>
-
-<?= !empty($admission['EXPECTED_DATE_VALUE'])
-    ? 'Extend Stay'
-    : 'Set Expected Date'
-?>
+<a href="extend_admission.php?admission_id=<?= (int)$admission['ADMISSION_ID'] ?>"
+   class="admission-action-btn btn-manage-stay">
+<i class="bi <?= !empty($admission['EXPECTED_DATE_VALUE']) ? 'bi-calendar-plus' : 'bi-calendar-check' ?>"></i>
+<?= !empty($admission['EXPECTED_DATE_VALUE']) ? 'Extend Stay' : 'Set Expected Date' ?>
 </a>
 
-<a
-    href="discharge_patient.php?admission_id=<?= (int)$admission['ADMISSION_ID'] ?>"
-    class="admission-action-btn btn-discharge-patient"
->
+<a href="discharge_patient.php?admission_id=<?= (int)$admission['ADMISSION_ID'] ?>"
+   class="admission-action-btn btn-discharge-patient">
 <i class="bi bi-box-arrow-right"></i>
-
-<?= ((int)($admission['IS_EARLY_DISCHARGE'] ?? 0) === 1)
-    ? 'Discharge Early'
-    : 'Discharge'
-?>
+<?= ((int)($admission['IS_EARLY_DISCHARGE'] ?? 0) === 1) ? 'Discharge Early' : 'Discharge' ?>
 </a>
 
 </div>
-
 </td>
-
 </tr>
 
 <?php endforeach; ?>
-
 <?php else: ?>
-
 <tr>
-<td colspan="7" class="text-center text-muted py-4">
-No current admitted patients.
-</td>
+<td colspan="7" class="text-center text-muted py-4">No current admitted patients.</td>
 </tr>
-
 <?php endif; ?>
 
 </tbody>
-
 </table>
-
 </div>
-
 </div>
 
 
 <?php endif; ?>
+
 
 
 <!-- =====================================================
